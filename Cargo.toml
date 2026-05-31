@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Lucas Eufrasio <lucaseufrasio@gmail.com>"]
 description = "A concurrent dependency checker and upgrader with built-in security auditing."
+repository = "https://github.com/lucaseufrasio/tucupi"
+
 
 [dependencies]
 ratatui = "0.30.0"
@@ -15,3 +17,8 @@ reqwest = { version = "0.13.4", features = ["json"] }
 toml = "0.8.19"
 anyhow = "1.0.86"
 semver = "1.0.23"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
