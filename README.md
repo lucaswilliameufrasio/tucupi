@@ -79,6 +79,19 @@ Para analisar as dependências globais do sistema ao invés do projeto local:
 cargo run -- --global
 ```
 
+### Gerenciamento de Releases (`cargo-dist`)
+Para configurar a distribuição automatizada e pipelines de release, é altamente recomendado instalar o `cargo-dist` utilizando o `cargo-binstall` de forma segura (garantindo validação de assinaturas e criptografia ponta a ponta):
+
+```bash
+# Instalar cargo-dist de forma segura
+cargo binstall cargo-dist --secure
+```
+
+Para atualizar o setup ou sincronizar as pipelines locais/CI do `tucupi`:
+```bash
+dist init --yes
+```
+
 ---
 
 ## ⌨️ Atalhos de Navegação na TUI
