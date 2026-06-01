@@ -11,12 +11,12 @@ repository = "https://github.com/lucaseufrasio/tucupi"
 ratatui = "0.30.0"
 crossterm = "0.29.0"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "process", "fs", "io-util"] }
-serde = { version = "1.0.210", features = ["derive"] }
-serde_json = "1.0.120"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
 reqwest = { version = "0.13.4", features = ["json"] }
-toml = "0.8.19"
-anyhow = "1.0.86"
-semver = "1.0.23"
+toml = "1.1.2"
+anyhow = "1.0.102"
+semver = "1.0.28"
 
 # The profile that 'dist' will build with
 [profile.dist]
