@@ -7,6 +7,11 @@ pub enum Ecosystem {
     Dart,
     Elixir,
     Npm,
+    Php,
+    Ruby,
+    Python,
+    Pacman,
+    Mise,
 }
 
 impl Ecosystem {
@@ -17,6 +22,11 @@ impl Ecosystem {
             Ecosystem::Dart => "Dart",
             Ecosystem::Elixir => "Elixir",
             Ecosystem::Npm => "npm",
+            Ecosystem::Php => "PHP",
+            Ecosystem::Ruby => "Ruby",
+            Ecosystem::Python => "Python",
+            Ecosystem::Pacman => "Pacman",
+            Ecosystem::Mise => "mise",
         }
     }
 
@@ -27,6 +37,11 @@ impl Ecosystem {
             Ecosystem::Dart => "Pub",
             Ecosystem::Elixir => "Hex",
             Ecosystem::Npm => "npm",
+            Ecosystem::Php => "Packagist",
+            Ecosystem::Ruby => "RubyGems",
+            Ecosystem::Python => "PyPI",
+            Ecosystem::Pacman => "Arch Linux",
+            Ecosystem::Mise => "GitHub Actions",
         }
     }
 }

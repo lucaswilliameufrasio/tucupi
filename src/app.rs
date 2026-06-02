@@ -1,5 +1,6 @@
 use crate::models::{Dependency, Ecosystem, VulnerabilityInfo};
 use crate::config::Config;
+use crate::i18n::t;
 use crate::security::SecurityChecker;
 use crate::adapters::{check_all_outdated, check_global_outdated};
 use std::path::{Path, PathBuf};
@@ -47,6 +48,7 @@ pub struct App {
     pub status: AppStatus,
     pub modal: Modal,
     pub vuln_cache: HashMap<String, Result<Vec<VulnerabilityInfo>, String>>,
+    pub security_check_only: bool,
     
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
     pub event_rx: mpsc::UnboundedReceiver<AppEvent>,
@@ -71,6 +73,7 @@ impl App {
             status: AppStatus::Ready,
             modal: Modal::None,
             vuln_cache: HashMap::new(),
+            security_check_only: false,
             event_tx,
             event_rx,
         }
@@ -156,7 +159,7 @@ impl App {
             None => return,
         };
 
-        if self.status == AppStatus::Scanning {
+        if self.status != AppStatus::Ready && !matches!(self.status, AppStatus::UpgradeFailed(_, _)) {
             return;
         }
 
@@ -199,9 +202,49 @@ impl App {
         });
     }
 
+    pub fn check_security_selected(&mut self) {
+        let dep = match self.selected_dep() {
+            Some(d) => d.clone(),
+            None => return,
+        };
+
+        if self.status != AppStatus::Ready {
+            return;
+        }
+
+        let cache_key = format!("{}_{}_{}", dep.ecosystem.as_str(), dep.name, dep.latest_version);
+
+        if self.vuln_cache.contains_key(&cache_key) {
+            return;
+        }
+
+        self.security_check_only = true;
+        self.status = AppStatus::Upgrading(format!("Auditing security for {}...", dep.name));
+        let tx = self.event_tx.clone();
+        let checker = SecurityChecker::new();
+        let d = dep.clone();
+
+        tokio::spawn(async move {
+            match checker.check_vulnerability(&d.name, &d.latest_version, d.ecosystem).await {
+                Ok(vulns) => {
+                    let _ = tx.send(AppEvent::SecurityChecked(d, Ok(vulns)));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::SecurityChecked(d, Err(e.to_string())));
+                }
+            }
+        });
+    }
+
     pub fn process_security_result(&mut self, dep: Dependency, res: Result<Vec<VulnerabilityInfo>, String>) {
         let cache_key = format!("{}_{}_{}", dep.ecosystem.as_str(), dep.name, dep.latest_version);
         self.vuln_cache.insert(cache_key, res.clone());
+
+        if self.security_check_only {
+            self.security_check_only = false;
+            self.status = AppStatus::Ready;
+            return;
+        }
 
         match res {
             Ok(vulns) => {
@@ -311,58 +354,104 @@ impl App {
     }
 }
 
-fn get_upgrade_cmd(dep: &Dependency, target_dir: &Path) -> (String, Vec<String>) {
+pub(crate) fn strip_build_metadata(version: &str) -> &str {
+    version.split('+').next().unwrap_or(version)
+}
+
+pub(crate) fn get_upgrade_cmd(dep: &Dependency, target_dir: &Path) -> (String, Vec<String>) {
+    let clean_version = strip_build_metadata(&dep.latest_version).to_string();
+
     if dep.is_global {
         match dep.ecosystem {
             Ecosystem::Npm => {
-                ("npm".to_string(), vec!["install".to_string(), "-g".to_string(), format!("{}@{}", dep.name, dep.latest_version)])
+                ("npm".to_string(), vec!["install".to_string(), "-g".to_string(), format!("{}@{}", dep.name, clean_version)])
             }
             Ecosystem::Cargo => {
                 ("cargo".to_string(), vec!["install".to_string(), dep.name.clone(), "--force".to_string()])
+            }
+            Ecosystem::Pacman => {
+                ("paru".to_string(), vec!["-S".to_string(), dep.name.clone()])
+            }
+            Ecosystem::Mise => {
+                ("mise".to_string(), vec!["install".to_string(), format!("{}@{}", dep.name, clean_version)])
             }
             _ => ("echo".to_string(), vec!["Ecosystem not supported globally".to_string()]),
         }
     } else {
         match dep.ecosystem {
             Ecosystem::Cargo => {
-                ("cargo".to_string(), vec!["add".to_string(), format!("{}@{}", dep.name, dep.latest_version)])
+                ("cargo".to_string(), vec!["add".to_string(), format!("{}@{}", dep.name, clean_version)])
             }
             Ecosystem::Go => {
-                ("go".to_string(), vec!["get".to_string(), format!("{}@{}", dep.name, dep.latest_version)])
+                ("go".to_string(), vec!["get".to_string(), format!("{}@{}", dep.name, clean_version)])
             }
             Ecosystem::Dart => {
-                ("dart".to_string(), vec!["pub".to_string(), "add".to_string(), format!("{}:{}", dep.name, dep.latest_version)])
+                ("dart".to_string(), vec!["pub".to_string(), "add".to_string(), format!("{}:{}", dep.name, clean_version)])
             }
             Ecosystem::Elixir => {
                 ("mix".to_string(), vec!["deps.update".to_string(), dep.name.clone()])
             }
             Ecosystem::Npm => {
                 let mut cmd = "npm".to_string();
-                let mut args = vec!["install".to_string(), format!("{}@{}", dep.name, dep.latest_version)];
+                let mut args = vec!["install".to_string(), format!("{}@{}", dep.name, clean_version)];
                 
                 if target_dir.join("pnpm-lock.yaml").exists() {
                     cmd = "pnpm".to_string();
-                    args = vec!["add".to_string(), format!("{}@{}", dep.name, dep.latest_version)];
+                    args = vec!["add".to_string(), format!("{}@{}", dep.name, clean_version)];
                 } else if target_dir.join("yarn.lock").exists() {
                     cmd = "yarn".to_string();
-                    args = vec!["add".to_string(), format!("{}@{}", dep.name, dep.latest_version)];
+                    args = vec!["add".to_string(), format!("{}@{}", dep.name, clean_version)];
                 } else if target_dir.join("bun.lockb").exists() || target_dir.join("bun.lock").exists() {
                     cmd = "bun".to_string();
-                    args = vec!["add".to_string(), format!("{}@{}", dep.name, dep.latest_version)];
+                    args = vec!["add".to_string(), format!("{}@{}", dep.name, clean_version)];
                 } else if target_dir.join("deno.json").exists() || target_dir.join("deno.jsonc").exists() {
                     cmd = "deno".to_string();
-                    args = vec!["add".to_string(), format!("npm:{}@{}", dep.name, dep.latest_version)];
+                    args = vec!["add".to_string(), format!("npm:{}@{}", dep.name, clean_version)];
                 }
                 
                 (cmd, args)
+            }
+            Ecosystem::Php => {
+                ("composer".to_string(), vec!["require".to_string(), format!("{}:^{}", dep.name, clean_version)])
+            }
+            Ecosystem::Ruby => {
+                ("bundle".to_string(), vec!["update".to_string(), dep.name.clone()])
+            }
+            Ecosystem::Python => {
+                let pip = if cfg!(windows) { "pip" } else { "pip3" };
+                (pip.to_string(), vec!["install".to_string(), "--upgrade".to_string(), format!("{}=={}", dep.name, clean_version)])
+            }
+            Ecosystem::Pacman | Ecosystem::Mise => {
+                ("echo".to_string(), vec!["Only supported as global packages".to_string()])
             }
         }
     }
 }
 
-async fn run_upgrade_process(cmd: &str, args: Vec<String>, dir: &Path) -> Result<(), String> {
+fn suggest_fix(stderr: &str) -> String {
+    let lower = stderr.to_lowercase();
+    if lower.contains("linker") && lower.contains("not found") {
+        t("fix_build_tools").to_string()
+    } else if lower.contains("openssl") || lower.contains("libssl") {
+        t("fix_openssl").to_string()
+    } else if lower.contains("permission denied") {
+        t("fix_permission").to_string()
+    } else if lower.contains("error[e") || lower.contains("could not compile") {
+        t("fix_compilation").to_string()
+    } else if lower.contains("not found") || lower.contains("no such file") {
+        t("fix_not_found").to_string()
+    } else if lower.contains("network") || lower.contains("timeout") || lower.contains("connection refused") {
+        t("fix_network").to_string()
+    } else if lower.contains("rate limit") {
+        t("fix_rate_limit").to_string()
+    } else {
+        t("fix_generic").to_string()
+    }
+}
+
+pub(crate) async fn run_upgrade_process(cmd: &str, args: Vec<String>, dir: &Path) -> Result<(), String> {
     let output = tokio::process::Command::new(cmd)
-        .args(args)
+        .args(&args)
         .current_dir(dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -374,8 +463,16 @@ async fn run_upgrade_process(cmd: &str, args: Vec<String>, dir: &Path) -> Result
             if out.status.success() {
                 Ok(())
             } else {
+                let exit_code = out.status.code().map_or("unknown".to_string(), |code| code.to_string());
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                Err(format!("Process returned exit code {}: {}", out.status, stderr.trim()))
+                let error_lines: Vec<&str> = stderr.lines().map(|line| line.trim()).filter(|line| !line.is_empty()).collect();
+                let last_error = error_lines.iter().rev().take(3).rev().cloned().collect::<Vec<&str>>().join("; ");
+                let command_line = format!("{} {}", cmd, args.join(" "));
+                let hint = suggest_fix(&stderr);
+                Err(format!(
+                    "Comando: {}\n\nSaída: {} (exit: {})\n\n{}",
+                    command_line, last_error, exit_code, hint
+                ))
             }
         }
         Err(e) => Err(format!("Failed to start process: {}", e)),

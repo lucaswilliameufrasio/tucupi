@@ -124,11 +124,12 @@ impl JsTsAdapter {
                             if let Ok(reg_resp) = resp.json::<RegistryLatest>().await {
                                 let latest = reg_resp.version;
                                 let clean_current = current_constraint.trim_start_matches(|c| c == '^' || c == '~' || c == '*' || c == '=');
-                                if clean_current != latest && !latest.is_empty() && clean_current != "latest" {
-                                    let is_newer = if let (Ok(cur), Ok(lat)) = (semver::Version::parse(clean_current), semver::Version::parse(&latest)) {
+                                let clean_latest = latest.split('+').next().unwrap_or(&latest);
+                                if clean_current != clean_latest && !clean_latest.is_empty() && clean_current != "latest" {
+                                    let is_newer = if let (Ok(cur), Ok(lat)) = (semver::Version::parse(clean_current), semver::Version::parse(clean_latest)) {
                                         lat > cur
                                     } else {
-                                        clean_current != latest
+                                        clean_current != clean_latest
                                     };
 
                                     if is_newer {

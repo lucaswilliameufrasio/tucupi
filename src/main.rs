@@ -4,6 +4,8 @@ pub mod security;
 pub mod adapters;
 pub mod app;
 pub mod ui;
+pub mod batch;
+pub mod i18n;
 
 use app::{App, Modal};
 use std::io;
@@ -22,10 +24,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let mut target_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut boot_global = false;
+    let mut interactive = false;
 
     for arg in &args[1..] {
-        if arg == "--global" || arg == "-g" {
+        if arg == "--help" || arg == "-h" {
+            println!("🍵 TUCUPI");
+            println!();
+            println!("USAGE:");
+            println!("  tucupi [options] [directory]");
+            println!();
+            println!("OPTIONS:");
+            println!("  -g, --global        Start on the Global Packages tab");
+            println!("  -i, --interactive   Open interactive batch mode (npm-check style)");
+            println!("  -h, --help          Show this help message");
+            println!();
+            println!("  directory           Target project directory (default: current dir)");
+            println!();
+            println!("EXAMPLES:");
+            println!("  tucupi              Scan current directory and open TUI");
+            println!("  tucupi -g           Open TUI on Global tab");
+            println!("  tucupi -i           Interactive batch mode");
+            println!("  tucupi /path/to/proj Scan a specific project");
+            println!("  tucupi -i /path     Interactive mode in a specific directory");
+            return Ok(());
+        } else if arg == "--global" || arg == "-g" {
             boot_global = true;
+        } else if arg == "--interactive" || arg == "-i" {
+            interactive = true;
         } else if !arg.starts_with('-') {
             target_dir = PathBuf::from(arg);
         }
@@ -34,6 +59,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Convert target_dir to absolute path for safety
     if let Ok(abs) = std::fs::canonicalize(&target_dir) {
         target_dir = abs;
+    }
+
+    // Route to interactive batch mode if requested
+    if interactive {
+        return batch::run(target_dir, boot_global).await;
     }
 
     // 2. Set up Panic Hook to restore terminal state
@@ -93,6 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             KeyCode::Char('r') => app.trigger_scan(),
                             KeyCode::Char('u') => app.trigger_upgrade_selected(false),
                             KeyCode::Char('f') => app.trigger_upgrade_selected(true),
+                            KeyCode::Char('c') => app.check_security_selected(),
                             _ => {}
                         },
                     }

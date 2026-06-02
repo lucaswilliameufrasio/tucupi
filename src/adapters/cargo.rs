@@ -85,11 +85,12 @@ impl CargoAdapter {
                             if let Ok(crates_resp) = resp.json::<CratesIoResponse>().await {
                                 let latest = crates_resp.krate.max_version;
                                 let clean_current = current_constraint.trim_start_matches(|c| c == '^' || c == '=' || c == '~');
-                                if clean_current != latest && !latest.is_empty() {
-                                    let is_newer = if let (Ok(cur), Ok(lat)) = (semver::Version::parse(clean_current), semver::Version::parse(&latest)) {
+                                let clean_latest = latest.split('+').next().unwrap_or(&latest);
+                                if clean_current != clean_latest && !clean_latest.is_empty() {
+                                    let is_newer = if let (Ok(cur), Ok(lat)) = (semver::Version::parse(clean_current), semver::Version::parse(clean_latest)) {
                                         lat > cur
                                     } else {
-                                        clean_current != latest
+                                        clean_current != clean_latest
                                     };
 
                                     if is_newer {
