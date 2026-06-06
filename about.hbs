@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Third-Party Licenses</title></head>
+<body>
+<h1>Third-Party Licenses</h1>
+<p>This project uses third-party libraries. Their licenses are listed below.</p>
+{{~ #each licenses ~}}
+<h2>{{name}}</h2>
+<p><strong>{{count}}</strong> {{#if (eq count 1)~}} dependency uses {{~else~}} dependencies use {{~/if}} this license:</p>
+<ul>
+{{~ #each items ~}}
+<li><a href="{{#if repository ~}}{{repository}}{{~else~}}#{{~/if~}}">{{name}}</a> {{version}}</li>
+{{~/each~}}
+</ul>
+<pre><code>{{text}}</code></pre>
+{{~/each~}}
+</body>
+</html>

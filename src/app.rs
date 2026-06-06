@@ -163,6 +163,10 @@ impl App {
             return;
         }
 
+        if !dep.is_global && !is_safe_path(&self.target_dir) {
+            return;
+        }
+
         // Cache key for OSV check
         let cache_key = format!("{}_{}_{}", dep.ecosystem.as_str(), dep.name, dep.latest_version);
 
@@ -209,6 +213,10 @@ impl App {
         };
 
         if self.status != AppStatus::Ready {
+            return;
+        }
+
+        if !dep.is_global && !is_safe_path(&self.target_dir) {
             return;
         }
 
@@ -356,6 +364,26 @@ impl App {
 
 pub(crate) fn strip_build_metadata(version: &str) -> &str {
     version.split('+').next().unwrap_or(version)
+}
+
+/// System-critical paths where running upgrades is not allowed.
+const BLOCKED_PATHS: &[&str] = &[
+    "/etc", "/proc", "/sys", "/dev", "/boot", "/bin", "/sbin",
+    "/usr/bin", "/usr/sbin", "/lib", "/usr/lib", "/var",
+];
+
+pub(crate) fn is_safe_path(dir: &Path) -> bool {
+    let canonical = match dir.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let path_str = canonical.to_string_lossy();
+    for blocked in BLOCKED_PATHS {
+        if path_str == *blocked || path_str.starts_with(&format!("{}/", blocked)) {
+            return false;
+        }
+    }
+    true
 }
 
 pub(crate) fn get_upgrade_cmd(dep: &Dependency, target_dir: &Path) -> (String, Vec<String>) {

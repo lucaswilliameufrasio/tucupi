@@ -5,7 +5,8 @@ edition = "2021"
 authors = ["Lucas Eufrasio <lucaseufrasio@gmail.com>"]
 description = "A concurrent dependency checker and upgrader with built-in security auditing."
 repository = "https://github.com/lucaseufrasio/tucupi"
-
+license = "MIT"
+default-run = "tucupi"
 
 [dependencies]
 ratatui = "0.30.0"
@@ -17,6 +18,12 @@ reqwest = { version = "0.13.4", features = ["json"] }
 toml = "1.1.2"
 anyhow = "1.0.102"
 semver = "1.0.28"
+thiserror = "2.0"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.14"
 
 # The profile that 'dist' will build with
 [profile.dist]

@@ -1,0 +1,34 @@
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+"""
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}{% endfor %}
+{% endfor %}
+"""
+trim = true
+postprocessors = [
+  { pattern = "\\[([^\\]]+)\\] \\(#([0-9]+)\\)", replace = "[$1](#$2)" },
+]
+
+[git-cliff]
+# parse conventional commits
+conventional_commits = true
+# treat "feat" and "fix" as "important"
+filter_unconventional = true
+# only groups with scope
+split_commits = false
+# commit preprocessors
+commit_preprocessors = [
+  { pattern = "\\s+Closes #\\d+", replace = "" },
+]
+
+[git-cliff.remote.github]
+owner = "lucaseufrasio"
+repo = "tucupi"

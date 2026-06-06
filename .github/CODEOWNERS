@@ -1,0 +1,10 @@
+# Default owners
+* @lucaseufrasio
+
+# CI/CD and release workflows
+.github/workflows/ @lucaseufrasio
+
+# Security-sensitive code
+src/security.rs @lucaseufrasio
+src/config.rs @lucaseufrasio
+src/app.rs @lucaseufrasio

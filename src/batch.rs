@@ -261,7 +261,7 @@ fn process_security_checked(
                 *progress_message = format!("[SKIPPED] {} — vulnerável, sem força habilitada", dependency.name);
                 ItemOutcome::SkippedVulnerable(filtered_vulns)
             };
-            *current_cursor += 1;
+            *current_cursor = current_cursor.saturating_add(1);
             *current_cursor >= items.len()
         }
     }
@@ -303,7 +303,7 @@ fn process_upgrade_finished(
             *progress_message = format!("[FAILED] {} — {}", item.dependency.name, error_message);
         }
     }
-    *current_cursor += 1;
+    *current_cursor = current_cursor.saturating_add(1);
     *current_cursor >= items.len()
 }
 
