@@ -2,32 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
 
-### Added
+### <!-- 0 -->🚀 Features
 
-- i18n system with pt-BR and en locale detection (LANG/LC_ALL)
-- Interactive batch mode (`--interactive`/`-i`) with multi-select checklist
-- Security-only check mode (press `c` to audit without upgrading)
-- Upgrade in progress/failure/success status in right panel
-- Troubleshooting suggestions for common upgrade errors
-- Ecosystem support: PHP (Composer), Ruby (Bundler), Python (pip3)
-- System package support: paru/pacman (Arch Linux), mise (tool version manager)
-- Global pnpm and bun package detection
-- `--help`/`-h` CLI flag
+- Initialize tucupi concurrent dependency guard TUI app
+- I18n, batch mode, new ecosystems, troubleshooting, and fixes
 
-### Fixed
+### <!-- 1 -->🐛 Bug Fixes
 
-- Prevented multiple concurrent upgrades from being triggered
-- Stripped build metadata (`+spec-1.1`) from upgrade commands
-- Fixed semver comparison with build metadata in cargo and JS/TS adapters
-- Allowed retry during `UpgradeFailed` status without requiring re-scan
-- Cleaned error message formatting in upgrade process output
+- Use correct GitHub Actions SHAs from acari
+- Add required toolchain input to dtolnay/rust-toolchain steps
+- Copy prepare-release and release workflows from acari
 
-### Security
+### <!-- 3 -->📚 Documentation
 
-- Added MIT license file
-- Pinned GitHub Actions to commit SHAs
-- Scoped CI permissions to least privilege
-- Added security policy (SECURITY.md)
-- Added CODEOWNERS for sensitive paths
+- Document cargo-dist secure installation instructions in README
+- Add guides for automated distribution and security policies
+
+### <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Configure cargo-dist automated release workflow and installers
+- Upgrade dependencies
+- Publish-ready infrastructure, security hardening, and CI
+- Add lib.rs, build.rs, enhance CI with convention checks
+- Fix fmt, clippy warnings, and action SHAs
