@@ -1,13 +1,6 @@
-pub mod models;
-pub mod config;
-pub mod security;
-pub mod adapters;
-pub mod app;
-pub mod ui;
-pub mod batch;
-pub mod i18n;
-
-use app::{App, Modal};
+use tucupi::app::{App, Modal};
+use tucupi::batch;
+use tucupi::ui;
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
