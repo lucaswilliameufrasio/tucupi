@@ -1,6 +1,6 @@
 use serde::Deserialize;
-use std::path::Path;
 use std::collections::HashSet;
+use std::path::Path;
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct SecurityConfig {
@@ -87,4 +87,3 @@ mod tests {
         assert!(!config.is_vulnerability_ignored("GHSA-other"));
     }
 }
-

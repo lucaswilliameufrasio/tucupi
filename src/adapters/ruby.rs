@@ -1,7 +1,7 @@
 use crate::models::{Dependency, Ecosystem};
+use anyhow::Result;
 use std::path::Path;
 use tokio::process::Command;
-use anyhow::Result;
 
 pub struct RubyAdapter;
 
@@ -51,11 +51,14 @@ impl RubyAdapter {
                         .unwrap_or(installed_part)
                         .to_string();
 
-                    if package_name != "Unknown" && current_version_str != latest_version && latest_version != "Unknown" {
+                    if package_name != "Unknown"
+                        && current_version_str != latest_version
+                        && latest_version != "Unknown"
+                    {
                         dependencies.push(Dependency {
                             name: package_name.to_string(),
                             current_version: current_version_str,
-                            latest_version: latest_version,
+                            latest_version,
                             ecosystem: Ecosystem::Ruby,
                             is_global: false,
                         });

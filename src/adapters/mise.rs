@@ -1,7 +1,7 @@
 use crate::models::{Dependency, Ecosystem};
+use anyhow::Result;
 use std::path::Path;
 use tokio::process::Command;
-use anyhow::Result;
 
 pub struct MiseAdapter;
 
@@ -19,10 +19,7 @@ impl MiseAdapter {
         let _dir = dir;
         let mut deps = Vec::new();
 
-        let output = Command::new("mise")
-            .args(["outdated"])
-            .output()
-            .await;
+        let output = Command::new("mise").args(["outdated"]).output().await;
 
         let output = match output {
             Ok(out) => out,

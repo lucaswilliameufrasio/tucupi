@@ -1,9 +1,9 @@
 use crate::models::{Dependency, Ecosystem};
-use std::path::Path;
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
-use reqwest::Client;
+use std::path::Path;
 use std::time::Duration;
 
 #[derive(Deserialize, Debug)]
@@ -39,8 +39,7 @@ impl CargoAdapter {
             .await
             .context("Failed to read Cargo.toml")?;
 
-        let parsed: CargoToml = toml::from_str(&content)
-            .context("Failed to parse Cargo.toml")?;
+        let parsed: CargoToml = toml::from_str(&content).context("Failed to parse Cargo.toml")?;
 
         let mut deps_to_check = HashMap::new();
 
@@ -70,43 +69,44 @@ impl CargoAdapter {
             tasks.push(tokio::spawn(async move {
                 let url = format!("https://crates.io/api/v1/crates/{}", name);
                 let response = client.get(&url).send().await;
-                match response {
-                    Ok(resp) => {
-                        if resp.status().is_success() {
-                            #[derive(Deserialize)]
-                            struct CrateInfo {
-                                max_version: String,
-                            }
-                            #[derive(Deserialize)]
-                            struct CratesIoResponse {
-                                #[serde(rename = "crate")]
-                                krate: CrateInfo,
-                            }
-                            if let Ok(crates_resp) = resp.json::<CratesIoResponse>().await {
-                                let latest = crates_resp.krate.max_version;
-                                let clean_current = current_constraint.trim_start_matches(|c| c == '^' || c == '=' || c == '~');
-                                let clean_latest = latest.split('+').next().unwrap_or(&latest);
-                                if clean_current != clean_latest && !clean_latest.is_empty() {
-                                    let is_newer = if let (Ok(cur), Ok(lat)) = (semver::Version::parse(clean_current), semver::Version::parse(clean_latest)) {
-                                        lat > cur
-                                    } else {
-                                        clean_current != clean_latest
-                                    };
+                if let Ok(resp) = response {
+                    if resp.status().is_success() {
+                        #[derive(Deserialize)]
+                        struct CrateInfo {
+                            max_version: String,
+                        }
+                        #[derive(Deserialize)]
+                        struct CratesIoResponse {
+                            #[serde(rename = "crate")]
+                            krate: CrateInfo,
+                        }
+                        if let Ok(crates_resp) = resp.json::<CratesIoResponse>().await {
+                            let latest = crates_resp.krate.max_version;
+                            let clean_current =
+                                current_constraint.trim_start_matches(['^', '=', '~']);
+                            let clean_latest = latest.split('+').next().unwrap_or(&latest);
+                            if clean_current != clean_latest && !clean_latest.is_empty() {
+                                let is_newer = if let (Ok(cur), Ok(lat)) = (
+                                    semver::Version::parse(clean_current),
+                                    semver::Version::parse(clean_latest),
+                                ) {
+                                    lat > cur
+                                } else {
+                                    clean_current != clean_latest
+                                };
 
-                                    if is_newer {
-                                        return Some(Dependency {
-                                            name,
-                                            current_version: current_constraint,
-                                            latest_version: latest,
-                                            ecosystem: Ecosystem::Cargo,
-                                            is_global: false,
-                                        });
-                                    }
+                                if is_newer {
+                                    return Some(Dependency {
+                                        name,
+                                        current_version: current_constraint,
+                                        latest_version: latest,
+                                        ecosystem: Ecosystem::Cargo,
+                                        is_global: false,
+                                    });
                                 }
                             }
                         }
                     }
-                    Err(_) => {}
                 }
                 None
             }));
@@ -135,14 +135,16 @@ mod tests {
         }
         let adapter = CargoAdapter::try_new().unwrap();
         let outdated = adapter.check_outdated(&mock_path).await.unwrap();
-        
-        assert!(!outdated.is_empty(), "Mock project should have outdated dependencies");
-        
+
+        assert!(
+            !outdated.is_empty(),
+            "Mock project should have outdated dependencies"
+        );
+
         let anyhow_dep = outdated.iter().find(|d| d.name == "anyhow");
         assert!(anyhow_dep.is_some(), "Should detect anyhow as outdated");
-        
+
         let serde_dep = outdated.iter().find(|d| d.name == "serde");
         assert!(serde_dep.is_some(), "Should detect serde as outdated");
     }
 }
-

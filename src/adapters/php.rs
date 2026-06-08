@@ -1,8 +1,8 @@
 use crate::models::{Dependency, Ecosystem};
-use std::path::Path;
-use tokio::process::Command;
 use anyhow::Result;
 use serde_json::Value;
+use std::path::Path;
+use tokio::process::Command;
 
 pub struct PhpAdapter;
 

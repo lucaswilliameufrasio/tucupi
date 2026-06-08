@@ -1,9 +1,9 @@
 use crate::models::{Dependency, Ecosystem};
-use std::path::Path;
 use anyhow::Result;
+use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
-use reqwest::Client;
+use std::path::Path;
 use std::time::Duration;
 
 #[derive(Deserialize, Debug)]
@@ -26,9 +26,7 @@ pub struct JsTsAdapter {
 
 impl JsTsAdapter {
     pub fn try_new() -> Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()?;
+        let client = Client::builder().timeout(Duration::from_secs(3)).build()?;
         Ok(Self { client })
     }
 
@@ -63,8 +61,9 @@ impl JsTsAdapter {
 
         if let Some(path) = deno_path {
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                let clean_content = if path.extension().map_or(false, |ext| ext == "jsonc") {
-                    content.lines()
+                let clean_content = if path.extension().is_some_and(|ext| ext == "jsonc") {
+                    content
+                        .lines()
                         .map(|l| {
                             if let Some(idx) = l.find("//") {
                                 &l[..idx]
@@ -80,18 +79,19 @@ impl JsTsAdapter {
 
                 if let Ok(parsed) = serde_json::from_str::<DenoJson>(&clean_content) {
                     for (_name, import_url) in parsed.imports {
-                        if import_url.starts_with("npm:") {
-                            let parts: Vec<&str> = import_url["npm:".len()..].split('@').collect();
+                        if let Some(stripped) = import_url.strip_prefix("npm:") {
+                            let parts: Vec<&str> = stripped.split('@').collect();
                             if parts.len() >= 2 {
                                 let pkg_name = parts[0].to_string();
                                 let pkg_ver = parts[1].to_string();
                                 deps_to_check.insert(pkg_name, (pkg_ver, Ecosystem::Npm));
                             } else if parts.len() == 1 {
                                 let pkg_name = parts[0].to_string();
-                                deps_to_check.insert(pkg_name, ("latest".to_string(), Ecosystem::Npm));
+                                deps_to_check
+                                    .insert(pkg_name, ("latest".to_string(), Ecosystem::Npm));
                             }
-                        } else if import_url.starts_with("jsr:") {
-                            let parts: Vec<&str> = import_url["jsr:".len()..].split('@').collect();
+                        } else if let Some(stripped) = import_url.strip_prefix("jsr:") {
+                            let parts: Vec<&str> = stripped.split('@').collect();
                             if parts.len() >= 2 {
                                 let pkg_name = parts[0].to_string();
                                 let pkg_ver = parts[1].to_string();
@@ -114,38 +114,43 @@ impl JsTsAdapter {
             tasks.push(tokio::spawn(async move {
                 let url = format!("https://registry.npmjs.org/{}/latest", name);
                 let response = client.get(&url).send().await;
-                match response {
-                    Ok(resp) => {
-                        if resp.status().is_success() {
-                            #[derive(Deserialize)]
-                            struct RegistryLatest {
-                                version: String,
-                            }
-                            if let Ok(reg_resp) = resp.json::<RegistryLatest>().await {
-                                let latest = reg_resp.version;
-                                let clean_current = current_constraint.trim_start_matches(|c| c == '^' || c == '~' || c == '*' || c == '=');
-                                let clean_latest = latest.split('+').next().unwrap_or(&latest);
-                                if clean_current != clean_latest && !clean_latest.is_empty() && clean_current != "latest" {
-                                    let is_newer = if let (Ok(cur), Ok(lat)) = (semver::Version::parse(clean_current), semver::Version::parse(clean_latest)) {
-                                        lat > cur
-                                    } else {
-                                        clean_current != clean_latest
-                                    };
+                if let Ok(resp) = response {
+                    if resp.status().is_success() {
+                        #[derive(Deserialize)]
+                        struct RegistryLatest {
+                            version: String,
+                        }
+                        if let Ok(reg_resp) = resp.json::<RegistryLatest>().await {
+                            let latest = reg_resp.version;
+                            let clean_current = current_constraint.trim_start_matches(|c| {
+                                c == '^' || c == '~' || c == '*' || c == '='
+                            });
+                            let clean_latest = latest.split('+').next().unwrap_or(&latest);
+                            if clean_current != clean_latest
+                                && !clean_latest.is_empty()
+                                && clean_current != "latest"
+                            {
+                                let is_newer = if let (Ok(cur), Ok(lat)) = (
+                                    semver::Version::parse(clean_current),
+                                    semver::Version::parse(clean_latest),
+                                ) {
+                                    lat > cur
+                                } else {
+                                    clean_current != clean_latest
+                                };
 
-                                    if is_newer {
-                                        return Some(Dependency {
-                                            name,
-                                            current_version: current_constraint,
-                                            latest_version: latest,
-                                            ecosystem,
-                                            is_global: false,
-                                        });
-                                    }
+                                if is_newer {
+                                    return Some(Dependency {
+                                        name,
+                                        current_version: current_constraint,
+                                        latest_version: latest,
+                                        ecosystem,
+                                        is_global: false,
+                                    });
                                 }
                             }
                         }
                     }
-                    Err(_) => {}
                 }
                 None
             }));

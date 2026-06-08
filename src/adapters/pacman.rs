@@ -1,7 +1,7 @@
 use crate::models::{Dependency, Ecosystem};
+use anyhow::Result;
 use std::path::Path;
 use tokio::process::Command;
-use anyhow::Result;
 
 pub struct PacmanAdapter;
 
@@ -21,10 +21,7 @@ impl PacmanAdapter {
         let mut deps = Vec::new();
         let _dir = dir; // unused but kept for signature consistency
 
-        let pacman_output = Command::new("pacman")
-            .args(["-Qu"])
-            .output()
-            .await;
+        let pacman_output = Command::new("pacman").args(["-Qu"]).output().await;
 
         if let Ok(output) = pacman_output {
             if output.status.success() {
@@ -56,10 +53,7 @@ impl PacmanAdapter {
             }
         }
 
-        let paru_output = Command::new("paru")
-            .args(["-Qua"])
-            .output()
-            .await;
+        let paru_output = Command::new("paru").args(["-Qua"]).output().await;
 
         if let Ok(output) = paru_output {
             if output.status.success() {
@@ -76,16 +70,17 @@ impl PacmanAdapter {
                         if let Some((current, latest)) = version_info.split_once(" -> ") {
                             let current_version = current.to_string();
                             let latest_version = latest.to_string();
-                            if current_version != latest_version && latest_version != "Unknown" {
-                                if !deps.iter().any(|d: &Dependency| d.name == name) {
-                                    deps.push(Dependency {
-                                        name,
-                                        current_version,
-                                        latest_version,
-                                        ecosystem: Ecosystem::Pacman,
-                                        is_global: true,
-                                    });
-                                }
+                            if current_version != latest_version
+                                && latest_version != "Unknown"
+                                && !deps.iter().any(|d: &Dependency| d.name == name)
+                            {
+                                deps.push(Dependency {
+                                    name,
+                                    current_version,
+                                    latest_version,
+                                    ecosystem: Ecosystem::Pacman,
+                                    is_global: true,
+                                });
                             }
                         }
                     }

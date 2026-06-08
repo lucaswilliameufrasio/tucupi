@@ -1,6 +1,6 @@
 use crate::app::{App, AppStatus, Modal, Tab};
-use crate::models::{Ecosystem, VulnerabilityInfo};
 use crate::i18n::{t, tf};
+use crate::models::{Ecosystem, VulnerabilityInfo};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -37,8 +37,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
         ])
         .split(size);
 
-    let title = Paragraph::new(t("title"))
-        .style(Style::default().fg(Color::Yellow).bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD));
+    let title = Paragraph::new(t("title")).style(
+        Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::Rgb(30, 41, 59))
+            .add_modifier(Modifier::BOLD),
+    );
     f.render_widget(title, chunks[0]);
 
     let tab_chunks = Layout::default()
@@ -49,19 +53,25 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let local_span = ratatui::text::Span::styled(
         tf("tab_local", &[&app.local_deps.len().to_string()]),
         if app.active_tab == Tab::Local {
-            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Gray).bg(Color::Rgb(51, 65, 85))
-        }
+        },
     );
 
     let global_span = ratatui::text::Span::styled(
         tf("tab_global", &[&app.global_deps.len().to_string()]),
         if app.active_tab == Tab::Global {
-            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Gray).bg(Color::Rgb(51, 65, 85))
-        }
+        },
     );
 
     let tabs_line = ratatui::text::Line::from(vec![
@@ -71,15 +81,27 @@ pub fn render(f: &mut Frame, app: &mut App) {
     ]);
 
     let tabs = Paragraph::new(tabs_line)
-        .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(Color::Cyan)))
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
         .style(Style::default().bg(Color::Rgb(15, 23, 42)));
     f.render_widget(tabs, tab_chunks[0]);
 
     let dir_text = tf("dir_repo", &[&app.target_dir.to_string_lossy()]);
     let dir = Paragraph::new(dir_text)
         .alignment(ratatui::layout::Alignment::Right)
-        .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(Color::Cyan)))
-        .style(Style::default().fg(Color::Yellow).bg(Color::Rgb(15, 23, 42)));
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .style(
+            Style::default()
+                .fg(Color::Yellow)
+                .bg(Color::Rgb(15, 23, 42)),
+        );
     f.render_widget(dir, tab_chunks[1]);
 
     let body_chunks = Layout::default()
@@ -88,35 +110,61 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .split(chunks[2]);
 
     let deps = app.current_deps().clone();
-    let header_cells = vec![t("col_ecosystem"), t("col_package"), t("col_current"), t("col_latest")];
+    let header_cells = vec![
+        t("col_ecosystem"),
+        t("col_package"),
+        t("col_current"),
+        t("col_latest"),
+    ];
     let header = Row::new(header_cells)
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .height(1);
 
-    let rows: Vec<Row> = deps.iter().map(|dep| {
-        let color = eco_color(dep.ecosystem);
-        Row::new(vec![
-            Cell::from(dep.ecosystem.as_str().to_string()).style(Style::default().fg(color).add_modifier(Modifier::BOLD)),
-            Cell::from(dep.name.clone()),
-            Cell::from(dep.current_version.clone()).style(Style::default().fg(Color::DarkGray)),
-            Cell::from(dep.latest_version.clone()).style(Style::default().fg(Color::Green)),
-        ])
-    }).collect();
+    let rows: Vec<Row> = deps
+        .iter()
+        .map(|dep| {
+            let color = eco_color(dep.ecosystem);
+            Row::new(vec![
+                Cell::from(dep.ecosystem.as_str().to_string())
+                    .style(Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Cell::from(dep.name.clone()),
+                Cell::from(dep.current_version.clone()).style(Style::default().fg(Color::DarkGray)),
+                Cell::from(dep.latest_version.clone()).style(Style::default().fg(Color::Green)),
+            ])
+        })
+        .collect();
 
     let tab_title = match app.active_tab {
         Tab::Local => t("table_title_local"),
         Tab::Global => t("table_title_global"),
     };
 
-    let table = Table::new(rows, [
-        Constraint::Percentage(25),
-        Constraint::Percentage(45),
-        Constraint::Percentage(15),
-        Constraint::Percentage(15),
-    ])
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Percentage(25),
+            Constraint::Percentage(45),
+            Constraint::Percentage(15),
+            Constraint::Percentage(15),
+        ],
+    )
     .header(header)
-    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(tab_title).border_style(Style::default().fg(Color::Cyan)))
-    .row_highlight_style(Style::default().bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(tab_title)
+            .border_style(Style::default().fg(Color::Cyan)),
+    )
+    .row_highlight_style(
+        Style::default()
+            .bg(Color::Rgb(30, 41, 59))
+            .add_modifier(Modifier::BOLD),
+    )
     .highlight_symbol(" ➜ ");
 
     f.render_stateful_widget(table, body_chunks[0], &mut app.table_state);
@@ -128,7 +176,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .border_style(Style::default().fg(Color::Cyan));
 
     if let Some(dep) = app.selected_dep() {
-        let cache_key = format!("{}_{}_{}", dep.ecosystem.as_str(), dep.name, dep.latest_version);
+        let cache_key = format!(
+            "{}_{}_{}",
+            dep.ecosystem.as_str(),
+            dep.name,
+            dep.latest_version
+        );
         let detail_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -144,10 +197,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
             "{}\n{}\n{}",
             tf("detail_package", &[&dep.name]),
             tf("detail_ecosystem", &[dep.ecosystem.as_str()]),
-            tf("detail_version", &[&dep.current_version, &dep.latest_version]),
+            tf(
+                "detail_version",
+                &[&dep.current_version, &dep.latest_version]
+            ),
         );
-        let metadata = Paragraph::new(metadata_text)
-            .style(Style::default().fg(Color::White));
+        let metadata = Paragraph::new(metadata_text).style(Style::default().fg(Color::White));
         f.render_widget(metadata, detail_chunks[0]);
 
         let upgrade_brief = match &app.status {
@@ -162,8 +217,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
             AppStatus::UpgradeFailed(_, _) => Style::default().fg(Color::Red),
             _ => Style::default().fg(Color::DarkGray),
         };
-        let upgrade_brief_widget = Paragraph::new(upgrade_brief)
-            .style(status_style);
+        let upgrade_brief_widget = Paragraph::new(upgrade_brief).style(status_style);
         f.render_widget(upgrade_brief_widget, detail_chunks[1]);
 
         let mut vuln_section = String::new();
@@ -177,21 +231,26 @@ pub fn render(f: &mut Frame, app: &mut App) {
         if let Some(cached_res) = app.vuln_cache.get(&cache_key) {
             match cached_res {
                 Ok(vulns) => {
-                    let active_vulns: Vec<&VulnerabilityInfo> = vulns.iter()
+                    let active_vulns: Vec<&VulnerabilityInfo> = vulns
+                        .iter()
                         .filter(|v| !app.config.is_vulnerability_ignored(&v.id))
                         .collect();
 
                     if active_vulns.is_empty() {
                         vuln_section.push_str(t("secure_msg"));
                     } else {
-                        vuln_section.push_str(&tf("vuln_warning", &[&active_vulns.len().to_string()]));
+                        vuln_section
+                            .push_str(&tf("vuln_warning", &[&active_vulns.len().to_string()]));
                         for vuln in active_vulns {
-                            vuln_section.push_str(&tf("vuln_item", &[
-                                &vuln.id,
-                                &vuln.aliases.join(", "),
-                                &vuln.summary,
-                                &vuln.details,
-                            ]));
+                            vuln_section.push_str(&tf(
+                                "vuln_item",
+                                &[
+                                    &vuln.id,
+                                    &vuln.aliases.join(", "),
+                                    &vuln.summary,
+                                    &vuln.details,
+                                ],
+                            ));
                         }
                     }
                 }
@@ -212,18 +271,24 @@ pub fn render(f: &mut Frame, app: &mut App) {
             .wrap(Wrap { trim: true });
         f.render_widget(vuln_widget, detail_chunks[2]);
     } else {
-        let no_selection = Paragraph::new(t("no_selection"))
-            .style(Style::default().fg(Color::DarkGray));
+        let no_selection =
+            Paragraph::new(t("no_selection")).style(Style::default().fg(Color::DarkGray));
         let inner_area = detail_block.inner(body_chunks[1]);
         f.render_widget(detail_block, body_chunks[1]);
         f.render_widget(no_selection, inner_area);
     }
 
     let status_style = match app.status {
-        AppStatus::Scanning => Style::default().fg(Color::Yellow).bg(Color::Rgb(30, 41, 59)),
+        AppStatus::Scanning => Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::Rgb(30, 41, 59)),
         AppStatus::Upgrading(_) => Style::default().fg(Color::Cyan).bg(Color::Rgb(30, 41, 59)),
-        AppStatus::UpgradeSuccess(_) => Style::default().fg(Color::Green).bg(Color::Rgb(30, 41, 59)),
-        AppStatus::UpgradeFailed(_, _) => Style::default().fg(Color::Red).bg(Color::Rgb(30, 41, 59)),
+        AppStatus::UpgradeSuccess(_) => {
+            Style::default().fg(Color::Green).bg(Color::Rgb(30, 41, 59))
+        }
+        AppStatus::UpgradeFailed(_, _) => {
+            Style::default().fg(Color::Red).bg(Color::Rgb(30, 41, 59))
+        }
         AppStatus::Ready => Style::default().fg(Color::Gray).bg(Color::Rgb(15, 23, 42)),
     };
 
@@ -238,8 +303,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let status_widget = Paragraph::new(status_text).style(status_style);
     f.render_widget(status_widget, chunks[3]);
 
-    let help = Paragraph::new(t("help_tui"))
-        .style(Style::default().fg(Color::Black).bg(Color::Cyan));
+    let help =
+        Paragraph::new(t("help_tui")).style(Style::default().fg(Color::Black).bg(Color::Cyan));
     f.render_widget(help, chunks[4]);
 
     match &app.modal {

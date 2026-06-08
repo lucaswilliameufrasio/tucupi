@@ -1,7 +1,7 @@
 use crate::models::{Dependency, Ecosystem};
+use anyhow::Result;
 use std::path::Path;
 use tokio::process::Command;
-use anyhow::Result;
 
 pub struct ElixirAdapter;
 

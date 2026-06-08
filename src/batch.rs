@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::i18n::{t, tf};
 use crate::models::{Dependency, Ecosystem, VulnerabilityInfo};
 use crate::security::SecurityChecker;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -13,6 +13,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use ratatui::backend::CrosstermBackend;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -20,7 +21,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame, Terminal,
 };
-use ratatui::backend::CrosstermBackend;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectionState {
@@ -70,7 +70,10 @@ enum BatchEvent {
     UpgradeFinished(usize, Result<(), String>),
 }
 
-pub async fn run(target_dir: PathBuf, include_global: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(
+    target_dir: PathBuf,
+    include_global: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = disable_raw_mode();
@@ -90,7 +93,7 @@ pub async fn run(target_dir: PathBuf, include_global: bool) -> Result<(), Box<dy
     let mut screen = BatchScreen::Scanning;
 
     let scan_tx = event_tx.clone();
-    let scan_dir = target_dir.clone();
+    let scan_dir = target_dir.to_path_buf();
     tokio::spawn(async move {
         let mut all_dependencies = check_all_outdated(&scan_dir).await;
         if include_global {
@@ -109,12 +112,15 @@ pub async fn run(target_dir: PathBuf, include_global: bool) -> Result<(), Box<dy
         if let Ok(batch_event) = event_rx.try_recv() {
             match batch_event {
                 BatchEvent::ScanFinished(all_deps) => {
-                    let items: Vec<BatchItem> = all_deps.into_iter().map(|dep| BatchItem {
-                        dependency: dep,
-                        selection: SelectionState::None,
-                        vulns: None,
-                        outcome: ItemOutcome::Pending,
-                    }).collect();
+                    let items: Vec<BatchItem> = all_deps
+                        .into_iter()
+                        .map(|dep| BatchItem {
+                            dependency: dep,
+                            selection: SelectionState::None,
+                            vulns: None,
+                            outcome: ItemOutcome::Pending,
+                        })
+                        .collect();
                     screen = BatchScreen::Select {
                         items,
                         cursor: 0,
@@ -123,7 +129,12 @@ pub async fn run(target_dir: PathBuf, include_global: bool) -> Result<(), Box<dy
                 }
                 BatchEvent::SecurityChecked(index, result) => {
                     let is_done = process_security_checked(
-                        &mut screen, index, result, &config, &target_dir, &event_tx,
+                        &mut screen,
+                        index,
+                        result,
+                        &config,
+                        &target_dir,
+                        &event_tx,
                     );
                     if is_done {
                         if let BatchScreen::Executing { items, .. } =
@@ -151,7 +162,14 @@ pub async fn run(target_dir: PathBuf, include_global: bool) -> Result<(), Box<dy
                 if key.kind == KeyEventKind::Press {
                     let key_code = key.code;
                     let previous_screen = std::mem::replace(&mut screen, BatchScreen::Scanning);
-                    screen = handle_key_input(previous_screen, key_code, &event_tx, &target_dir, include_global, &mut running);
+                    screen = handle_key_input(
+                        previous_screen,
+                        key_code,
+                        &event_tx,
+                        &target_dir,
+                        include_global,
+                        &mut running,
+                    );
                 }
             }
         }
@@ -174,8 +192,13 @@ fn kick_off_security_checks(items: &[BatchItem], event_tx: &mpsc::UnboundedSende
         let ecosystem = item.dependency.ecosystem;
         let tx = event_tx.clone();
         tokio::spawn(async move {
-            let result = checker.check_vulnerability(&dependency_name, &dependency_latest, ecosystem).await;
-            let _ = tx.send(BatchEvent::SecurityChecked(index, result.map_err(|error| error.to_string())));
+            let result = checker
+                .check_vulnerability(&dependency_name, &dependency_latest, ecosystem)
+                .await;
+            let _ = tx.send(BatchEvent::SecurityChecked(
+                index,
+                result.map_err(|error| error.to_string()),
+            ));
         });
     }
 }
@@ -203,7 +226,7 @@ fn process_security_checked(
     index: usize,
     result: Result<Vec<VulnerabilityInfo>, String>,
     config: &Config,
-    target_dir: &PathBuf,
+    target_dir: &Path,
     event_tx: &mpsc::UnboundedSender<BatchEvent>,
 ) -> bool {
     let executing_state = match screen {
@@ -238,10 +261,14 @@ fn process_security_checked(
         None => (Vec::new(), false),
     };
 
-    let has_policy_issue = !filtered_vulns.is_empty() && !config.is_package_ignored(&dependency.name);
+    let has_policy_issue =
+        !filtered_vulns.is_empty() && !config.is_package_ignored(&dependency.name);
 
     if !has_policy_issue {
-        *progress_message = format!("Upgrading {} to {}...", dependency.name, dependency.latest_version);
+        *progress_message = format!(
+            "Upgrading {} to {}...",
+            dependency.name, dependency.latest_version
+        );
         spawn_upgrade(index, dependency, target_dir, event_tx);
         return false;
     }
@@ -249,16 +276,25 @@ fn process_security_checked(
     match item.selection {
         SelectionState::Force if !has_blocked_vulns => {
             item.outcome = ItemOutcome::ForceUpgraded;
-            *progress_message = format!("Upgrading {} to {}... (forçado)", dependency.name, dependency.latest_version);
+            *progress_message = format!(
+                "Upgrading {} to {}... (forçado)",
+                dependency.name, dependency.latest_version
+            );
             spawn_upgrade(index, dependency, target_dir, event_tx);
             false
         }
         _ => {
             item.outcome = if has_blocked_vulns {
-                *progress_message = format!("[BLOCKED] {} — bloqueado por política de segurança", dependency.name);
+                *progress_message = format!(
+                    "[BLOCKED] {} — bloqueado por política de segurança",
+                    dependency.name
+                );
                 ItemOutcome::Blocked(filtered_vulns)
             } else {
-                *progress_message = format!("[SKIPPED] {} — vulnerável, sem força habilitada", dependency.name);
+                *progress_message = format!(
+                    "[SKIPPED] {} — vulnerável, sem força habilitada",
+                    dependency.name
+                );
                 ItemOutcome::SkippedVulnerable(filtered_vulns)
             };
             *current_cursor = current_cursor.saturating_add(1);
@@ -292,10 +328,14 @@ fn process_upgrade_finished(
     match result {
         Ok(()) => {
             if let ItemOutcome::ForceUpgraded = &item.outcome {
-                *progress_message = format!("[FORCED] {} — upgrade forçado concluído", item.dependency.name);
+                *progress_message = format!(
+                    "[FORCED] {} — upgrade forçado concluído",
+                    item.dependency.name
+                );
             } else {
                 item.outcome = ItemOutcome::Upgraded;
-                *progress_message = format!("[OK] {} — upgrade seguro concluído", item.dependency.name);
+                *progress_message =
+                    format!("[OK] {} — upgrade seguro concluído", item.dependency.name);
             }
         }
         Err(error_message) => {
@@ -310,12 +350,12 @@ fn process_upgrade_finished(
 fn spawn_upgrade(
     index: usize,
     dependency: &Dependency,
-    target_dir: &PathBuf,
+    target_dir: &Path,
     event_tx: &mpsc::UnboundedSender<BatchEvent>,
 ) {
     let (command, args) = get_upgrade_cmd(dependency, target_dir);
     let upgrade_tx = event_tx.clone();
-    let target = target_dir.clone();
+    let target = target_dir.to_path_buf();
     tokio::spawn(async move {
         let upgrade_result = run_upgrade_process(&command, args, &target).await;
         let _ = upgrade_tx.send(BatchEvent::UpgradeFinished(index, upgrade_result));
@@ -326,7 +366,7 @@ fn handle_key_input(
     previous_screen: BatchScreen,
     key_code: KeyCode,
     event_tx: &mpsc::UnboundedSender<BatchEvent>,
-    target_dir: &PathBuf,
+    target_dir: &Path,
     include_global: bool,
     running: &mut bool,
 ) -> BatchScreen {
@@ -344,7 +384,11 @@ fn handle_key_input(
         } => match key_code {
             KeyCode::Char('q') => {
                 *running = false;
-                BatchScreen::Select { items, cursor, force_mode }
+                BatchScreen::Select {
+                    items,
+                    cursor,
+                    force_mode,
+                }
             }
             KeyCode::Up => {
                 let new_cursor = if cursor > 0 { cursor - 1 } else { cursor };
@@ -356,7 +400,11 @@ fn handle_key_input(
             }
             KeyCode::Down => {
                 let max_index = items.len().saturating_sub(1);
-                let new_cursor = if cursor < max_index { cursor + 1 } else { cursor };
+                let new_cursor = if cursor < max_index {
+                    cursor + 1
+                } else {
+                    cursor
+                };
                 BatchScreen::Select {
                     items,
                     cursor: new_cursor,
@@ -378,7 +426,9 @@ fn handle_key_input(
                 }
             }
             KeyCode::Enter => {
-                let has_selected = items.iter().any(|item| item.selection != SelectionState::None);
+                let has_selected = items
+                    .iter()
+                    .any(|item| item.selection != SelectionState::None);
                 if has_selected {
                     kick_off_security_checks(&items, event_tx);
                     BatchScreen::Executing {
@@ -387,10 +437,18 @@ fn handle_key_input(
                         progress_message: String::new(),
                     }
                 } else {
-                    BatchScreen::Select { items, cursor, force_mode }
+                    BatchScreen::Select {
+                        items,
+                        cursor,
+                        force_mode,
+                    }
                 }
             }
-            _ => BatchScreen::Select { items, cursor, force_mode },
+            _ => BatchScreen::Select {
+                items,
+                cursor,
+                force_mode,
+            },
         },
         BatchScreen::Executing { .. } => {
             if key_code == KeyCode::Char('q') {
@@ -405,7 +463,7 @@ fn handle_key_input(
             }
             KeyCode::Char('r') => {
                 let rescan_tx = event_tx.clone();
-                let rescan_dir = target_dir.clone();
+                let rescan_dir = target_dir.to_path_buf();
                 tokio::spawn(async move {
                     let mut all_deps = check_all_outdated(&rescan_dir).await;
                     if include_global {
@@ -435,7 +493,10 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
 
     let title_span = Span::styled(
         " 🍵 TUCUPI :: Modo Interativo ",
-        Style::default().fg(Color::Yellow).bg(Color::Rgb(30, 41, 59)).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::Rgb(30, 41, 59))
+            .add_modifier(Modifier::BOLD),
     );
     let title_widget = Paragraph::new(title_span);
     frame.render_widget(title_widget, layout_chunks[0]);
@@ -448,8 +509,8 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
             frame.render_widget(scanning_text, layout_chunks[1]);
 
             let help_text = t("batch_help_scan");
-            let help_widget = Paragraph::new(help_text)
-                .style(Style::default().fg(Color::Black).bg(Color::Cyan));
+            let help_widget =
+                Paragraph::new(help_text).style(Style::default().fg(Color::Black).bg(Color::Cyan));
             frame.render_widget(help_widget, layout_chunks[2]);
         }
 
@@ -459,8 +520,14 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
             force_mode: _force_mode,
         } => {
             let total_items = items.len();
-            let selected_count = items.iter().filter(|item| item.selection != SelectionState::None).count();
-            let force_count = items.iter().filter(|item| item.selection == SelectionState::Force).count();
+            let selected_count = items
+                .iter()
+                .filter(|item| item.selection != SelectionState::None)
+                .count();
+            let force_count = items
+                .iter()
+                .filter(|item| item.selection == SelectionState::Force)
+                .count();
 
             let list_height = layout_chunks[1].height as usize;
             let max_visible = list_height.saturating_sub(2);
@@ -472,10 +539,15 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
 
             let mut list_lines: Vec<Line> = Vec::new();
 
-            let header_line = Line::from(vec![
-                Span::raw(tf("batch_header", &[&total_items.to_string()])),
-            ])
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            let header_line = Line::from(vec![Span::raw(tf(
+                "batch_header",
+                &[&total_items.to_string()],
+            ))])
+            .style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
             list_lines.push(header_line);
             list_lines.push(Line::from(""));
 
@@ -534,13 +606,19 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                 list_lines.push(styled_line);
             }
 
-            let list_paragraph = Paragraph::new(list_lines)
-                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));
+            let list_paragraph = Paragraph::new(list_lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            );
             frame.render_widget(list_paragraph, layout_chunks[1]);
 
-            let help_text = tf("batch_help_select", &[&selected_count.to_string(), &force_count.to_string()]);
-            let help_widget = Paragraph::new(help_text)
-                .style(Style::default().fg(Color::Black).bg(Color::Cyan));
+            let help_text = tf(
+                "batch_help_select",
+                &[&selected_count.to_string(), &force_count.to_string()],
+            );
+            let help_widget =
+                Paragraph::new(help_text).style(Style::default().fg(Color::Black).bg(Color::Cyan));
             frame.render_widget(help_widget, layout_chunks[2]);
         }
 
@@ -549,18 +627,23 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
             current_cursor,
             progress_message,
         } => {
-            let mut execution_lines: Vec<Line> = Vec::new();
-
-            execution_lines.push(Line::from(Span::styled(
-                tf("batch_exec_title", &[&current_cursor.to_string(), &items.len().to_string()]),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            )));
-            execution_lines.push(Line::from(""));
-            execution_lines.push(Line::from(Span::styled(
-                progress_message,
-                Style::default().fg(Color::Yellow),
-            )));
-            execution_lines.push(Line::from(""));
+            let mut execution_lines: Vec<Line> = vec![
+                Line::from(Span::styled(
+                    tf(
+                        "batch_exec_title",
+                        &[&current_cursor.to_string(), &items.len().to_string()],
+                    ),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    progress_message,
+                    Style::default().fg(Color::Yellow),
+                )),
+                Line::from(""),
+            ];
 
             for (index, item) in items.iter().enumerate() {
                 if item.selection == SelectionState::None {
@@ -613,7 +696,9 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                     ),
                     Span::styled(
                         format!("{:8} ", item.dependency.ecosystem.as_str()),
-                        Style::default().fg(ecosystem_color(item.dependency.ecosystem)).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(ecosystem_color(item.dependency.ecosystem))
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(format!("{:30}  ", item.dependency.name)),
                     Span::styled(
@@ -632,13 +717,16 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                 execution_lines.push(execution_line);
             }
 
-            let execution_paragraph = Paragraph::new(execution_lines)
-                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));
+            let execution_paragraph = Paragraph::new(execution_lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            );
             frame.render_widget(execution_paragraph, layout_chunks[1]);
 
             let help_text = " [q] Sair ";
-            let help_widget = Paragraph::new(help_text)
-                .style(Style::default().fg(Color::Black).bg(Color::Cyan));
+            let help_widget =
+                Paragraph::new(help_text).style(Style::default().fg(Color::Black).bg(Color::Cyan));
             frame.render_widget(help_widget, layout_chunks[2]);
         }
 
@@ -647,32 +735,59 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
 
             report_lines.push(Line::from(Span::styled(
                 " Relatório de Atualizações ",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )));
             report_lines.push(Line::from(""));
 
-            let upgraded_items: Vec<&BatchItem> = items.iter().filter(|item| matches!(item.outcome, ItemOutcome::Upgraded)).collect();
-            let force_upgraded_items: Vec<&BatchItem> = items.iter().filter(|item| matches!(item.outcome, ItemOutcome::ForceUpgraded)).collect();
-            let failed_items: Vec<&BatchItem> = items.iter().filter(|item| matches!(item.outcome, ItemOutcome::Failed(_))).collect();
-            let blocked_items: Vec<&BatchItem> = items.iter().filter(|item| matches!(item.outcome, ItemOutcome::Blocked(_))).collect();
-            let skipped_items: Vec<&BatchItem> = items.iter().filter(|item| matches!(item.outcome, ItemOutcome::SkippedVulnerable(_))).collect();
+            let upgraded_items: Vec<&BatchItem> = items
+                .iter()
+                .filter(|item| matches!(item.outcome, ItemOutcome::Upgraded))
+                .collect();
+            let force_upgraded_items: Vec<&BatchItem> = items
+                .iter()
+                .filter(|item| matches!(item.outcome, ItemOutcome::ForceUpgraded))
+                .collect();
+            let failed_items: Vec<&BatchItem> = items
+                .iter()
+                .filter(|item| matches!(item.outcome, ItemOutcome::Failed(_)))
+                .collect();
+            let blocked_items: Vec<&BatchItem> = items
+                .iter()
+                .filter(|item| matches!(item.outcome, ItemOutcome::Blocked(_)))
+                .collect();
+            let skipped_items: Vec<&BatchItem> = items
+                .iter()
+                .filter(|item| matches!(item.outcome, ItemOutcome::SkippedVulnerable(_)))
+                .collect();
 
             if !upgraded_items.is_empty() {
                 report_lines.push(Line::from(Span::styled(
                     format!(" ✓ ATUALIZADOS COM SEGURANÇA ({})", upgraded_items.len()),
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 for item in &upgraded_items {
                     report_lines.push(Line::from(vec![
                         Span::raw("     "),
                         Span::styled(
                             format!("{:8}", item.dependency.ecosystem.as_str()),
-                            Style::default().fg(ecosystem_color(item.dependency.ecosystem)).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(ecosystem_color(item.dependency.ecosystem))
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::raw(format!("  {:30}", item.dependency.name)),
-                        Span::styled(format!(" {:10}", item.dependency.current_version), Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!(" {:10}", item.dependency.current_version),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                         Span::styled(" ➔ ", Style::default().fg(Color::Cyan)),
-                        Span::styled(format!("{:10}", item.dependency.latest_version), Style::default().fg(Color::Green)),
+                        Span::styled(
+                            format!("{:10}", item.dependency.latest_version),
+                            Style::default().fg(Color::Green),
+                        ),
                     ]));
                 }
                 report_lines.push(Line::from(""));
@@ -681,7 +796,9 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
             if !force_upgraded_items.is_empty() {
                 report_lines.push(Line::from(Span::styled(
                     format!(" ⚡ ATUALIZADOS COM FORÇA ({})", force_upgraded_items.len()),
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 for item in &force_upgraded_items {
                     let vuln_count = item.vulns.as_ref().map_or(0, |list| list.len());
@@ -689,12 +806,20 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                         Span::raw("     "),
                         Span::styled(
                             format!("{:8}", item.dependency.ecosystem.as_str()),
-                            Style::default().fg(ecosystem_color(item.dependency.ecosystem)).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(ecosystem_color(item.dependency.ecosystem))
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::raw(format!("  {:30}", item.dependency.name)),
-                        Span::styled(format!(" {:10}", item.dependency.current_version), Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!(" {:10}", item.dependency.current_version),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                         Span::styled(" ➔ ", Style::default().fg(Color::Cyan)),
-                        Span::styled(format!("{:10}", item.dependency.latest_version), Style::default().fg(Color::Green)),
+                        Span::styled(
+                            format!("{:10}", item.dependency.latest_version),
+                            Style::default().fg(Color::Green),
+                        ),
                         Span::raw(format!(" ({} vuln)", vuln_count)),
                     ]));
                 }
@@ -715,7 +840,9 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                         Span::raw("     "),
                         Span::styled(
                             format!("{:8}", item.dependency.ecosystem.as_str()),
-                            Style::default().fg(ecosystem_color(item.dependency.ecosystem)).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(ecosystem_color(item.dependency.ecosystem))
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::raw(format!("  {:30}", item.dependency.name)),
                         Span::raw(format!("  {}", error_message)),
@@ -735,12 +862,20 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                         Span::raw("     "),
                         Span::styled(
                             format!("{:8}", item.dependency.ecosystem.as_str()),
-                            Style::default().fg(ecosystem_color(item.dependency.ecosystem)).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(ecosystem_color(item.dependency.ecosystem))
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::raw(format!("  {:30}", item.dependency.name)),
-                        Span::styled(format!(" {:10}", item.dependency.current_version), Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!(" {:10}", item.dependency.current_version),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                         Span::styled(" ➔ ", Style::default().fg(Color::Cyan)),
-                        Span::styled(format!("{:10}", item.dependency.latest_version), Style::default().fg(Color::Green)),
+                        Span::styled(
+                            format!("{:10}", item.dependency.latest_version),
+                            Style::default().fg(Color::Green),
+                        ),
                         Span::raw(format!(" ({} vulns)", vuln_count)),
                     ]));
                 }
@@ -749,8 +884,13 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
 
             if !skipped_items.is_empty() {
                 report_lines.push(Line::from(Span::styled(
-                    format!(" ⊘ PULADOS (VULNERÁVEIS, SEM FORÇA) ({})", skipped_items.len()),
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                    format!(
+                        " ⊘ PULADOS (VULNERÁVEIS, SEM FORÇA) ({})",
+                        skipped_items.len()
+                    ),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 for item in &skipped_items {
                     let vuln_count = item.vulns.as_ref().map_or(0, |list| list.len());
@@ -758,19 +898,31 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                         Span::raw("     "),
                         Span::styled(
                             format!("{:8}", item.dependency.ecosystem.as_str()),
-                            Style::default().fg(ecosystem_color(item.dependency.ecosystem)).add_modifier(Modifier::BOLD),
+                            Style::default()
+                                .fg(ecosystem_color(item.dependency.ecosystem))
+                                .add_modifier(Modifier::BOLD),
                         ),
                         Span::raw(format!("  {:30}", item.dependency.name)),
-                        Span::styled(format!(" {:10}", item.dependency.current_version), Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!(" {:10}", item.dependency.current_version),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                         Span::styled(" ➔ ", Style::default().fg(Color::Cyan)),
-                        Span::styled(format!("{:10}", item.dependency.latest_version), Style::default().fg(Color::Green)),
+                        Span::styled(
+                            format!("{:10}", item.dependency.latest_version),
+                            Style::default().fg(Color::Green),
+                        ),
                         Span::raw(format!(" ({} vulns)", vuln_count)),
                     ]));
                 }
                 report_lines.push(Line::from(""));
             }
 
-            let _total_selected = upgraded_items.len() + force_upgraded_items.len() + failed_items.len() + blocked_items.len() + skipped_items.len();
+            let _total_selected = upgraded_items.len()
+                + force_upgraded_items.len()
+                + failed_items.len()
+                + blocked_items.len()
+                + skipped_items.len();
             let total_succeeded = upgraded_items.len() + force_upgraded_items.len();
 
             report_lines.push(Line::from(Span::styled(
@@ -781,17 +933,23 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                     blocked_items.len(),
                     skipped_items.len(),
                 ),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             )));
 
             let report_paragraph = Paragraph::new(report_lines)
-                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Cyan)),
+                )
                 .wrap(Wrap { trim: false });
             frame.render_widget(report_paragraph, layout_chunks[1]);
 
             let help_text = " [q] Sair | [r] Re-escanear ";
-            let help_widget = Paragraph::new(help_text)
-                .style(Style::default().fg(Color::Black).bg(Color::Cyan));
+            let help_widget =
+                Paragraph::new(help_text).style(Style::default().fg(Color::Black).bg(Color::Cyan));
             frame.render_widget(help_widget, layout_chunks[2]);
         }
     }

@@ -1,8 +1,8 @@
 use crate::models::{Dependency, Ecosystem};
-use std::path::Path;
-use tokio::process::Command;
 use anyhow::Result;
 use serde_json::Value;
+use std::path::Path;
+use tokio::process::Command;
 
 pub struct PythonAdapter;
 
@@ -58,13 +58,16 @@ impl PythonAdapter {
             for package in packages {
                 let name = package["name"].as_str().unwrap_or("Unknown").to_string();
                 let version = package["version"].as_str().unwrap_or("Unknown").to_string();
-                let latest_version = package["latest_version"].as_str().unwrap_or("Unknown").to_string();
+                let latest_version = package["latest_version"]
+                    .as_str()
+                    .unwrap_or("Unknown")
+                    .to_string();
 
                 if name != "Unknown" && version != latest_version && latest_version != "Unknown" {
                     dependencies.push(Dependency {
                         name,
                         current_version: version,
-                        latest_version: latest_version,
+                        latest_version,
                         ecosystem: Ecosystem::Python,
                         is_global: false,
                     });

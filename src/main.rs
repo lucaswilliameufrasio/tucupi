@@ -1,15 +1,15 @@
-use tucupi::app::{App, Modal};
-use tucupi::batch;
-use tucupi::ui;
-use std::io;
-use std::path::PathBuf;
-use std::time::Duration;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use std::io;
+use std::path::PathBuf;
+use std::time::Duration;
+use tucupi::app::{App, Modal};
+use tucupi::batch;
+use tucupi::ui;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Initialize App
     let mut app = App::new(target_dir, boot_global);
     app.load_config_sync().await; // Load local tucupi.toml sync at startup
-    app.trigger_scan();          // Run initial dependency checks in background
+    app.trigger_scan(); // Run initial dependency checks in background
 
     // 5. TUI Loop
     loop {

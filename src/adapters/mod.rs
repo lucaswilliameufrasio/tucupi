@@ -1,17 +1,17 @@
 pub mod cargo;
-pub mod go;
 pub mod dart;
 pub mod elixir;
-pub mod js_ts;
-pub mod php;
-pub mod ruby;
-pub mod python;
-pub mod pacman;
-pub mod mise;
 pub mod global;
+pub mod go;
+pub mod js_ts;
+pub mod mise;
+pub mod pacman;
+pub mod php;
+pub mod python;
+pub mod ruby;
 
-use std::path::Path;
 use crate::models::Dependency;
+use std::path::Path;
 
 pub async fn check_all_outdated(dir: &Path) -> Vec<Dependency> {
     let cargo = cargo::CargoAdapter::try_new();
@@ -75,15 +75,31 @@ pub async fn check_all_outdated(dir: &Path) -> Vec<Dependency> {
     );
 
     let mut all_deps = Vec::new();
-    
-    if let Ok(deps) = cargo_res { all_deps.extend(deps); }
-    if let Ok(deps) = go_res { all_deps.extend(deps); }
-    if let Ok(deps) = dart_res { all_deps.extend(deps); }
-    if let Ok(deps) = elixir_res { all_deps.extend(deps); }
-    if let Ok(deps) = js_ts_res { all_deps.extend(deps); }
-    if let Ok(deps) = php_res { all_deps.extend(deps); }
-    if let Ok(deps) = ruby_res { all_deps.extend(deps); }
-    if let Ok(deps) = python_res { all_deps.extend(deps); }
+
+    if let Ok(deps) = cargo_res {
+        all_deps.extend(deps);
+    }
+    if let Ok(deps) = go_res {
+        all_deps.extend(deps);
+    }
+    if let Ok(deps) = dart_res {
+        all_deps.extend(deps);
+    }
+    if let Ok(deps) = elixir_res {
+        all_deps.extend(deps);
+    }
+    if let Ok(deps) = js_ts_res {
+        all_deps.extend(deps);
+    }
+    if let Ok(deps) = php_res {
+        all_deps.extend(deps);
+    }
+    if let Ok(deps) = ruby_res {
+        all_deps.extend(deps);
+    }
+    if let Ok(deps) = python_res {
+        all_deps.extend(deps);
+    }
 
     all_deps
 }
@@ -102,13 +118,19 @@ pub async fn check_global_outdated() -> Vec<Dependency> {
         },
         async {
             match pacman {
-                Ok(ref adapter) => adapter.check_outdated(&std::path::PathBuf::from("/")).await.unwrap_or_default(),
+                Ok(ref adapter) => adapter
+                    .check_outdated(&std::path::PathBuf::from("/"))
+                    .await
+                    .unwrap_or_default(),
                 Err(_) => Vec::new(),
             }
         },
         async {
             match mise {
-                Ok(ref adapter) => adapter.check_outdated(&std::path::PathBuf::from("/")).await.unwrap_or_default(),
+                Ok(ref adapter) => adapter
+                    .check_outdated(&std::path::PathBuf::from("/"))
+                    .await
+                    .unwrap_or_default(),
                 Err(_) => Vec::new(),
             }
         }

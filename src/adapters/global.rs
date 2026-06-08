@@ -1,10 +1,10 @@
 use crate::models::{Dependency, Ecosystem};
-use tokio::process::Command;
 use anyhow::Result;
+use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
-use reqwest::Client;
 use std::time::Duration;
+use tokio::process::Command;
 
 pub struct GlobalAdapter {
     client: Client,
@@ -119,41 +119,41 @@ impl GlobalAdapter {
             tasks.push(tokio::spawn(async move {
                 let url = format!("https://crates.io/api/v1/crates/{}", name);
                 let response = client.get(&url).send().await;
-                match response {
-                    Ok(resp) => {
-                        if resp.status().is_success() {
-                            #[derive(Deserialize)]
-                            struct CrateInfo {
-                                max_version: String,
-                            }
-                            #[derive(Deserialize)]
-                            struct CratesIoResponse {
-                                #[serde(rename = "crate")]
-                                krate: CrateInfo,
-                            }
-                            if let Ok(crates_resp) = resp.json::<CratesIoResponse>().await {
-                                let latest = crates_resp.krate.max_version;
-                                if current != latest && !latest.is_empty() {
-                                    let is_newer = if let (Ok(cur), Ok(lat)) = (semver::Version::parse(&current), semver::Version::parse(&latest)) {
-                                        lat > cur
-                                    } else {
-                                        current != latest
-                                    };
+                if let Ok(resp) = response {
+                    if resp.status().is_success() {
+                        #[derive(Deserialize)]
+                        struct CrateInfo {
+                            max_version: String,
+                        }
+                        #[derive(Deserialize)]
+                        struct CratesIoResponse {
+                            #[serde(rename = "crate")]
+                            krate: CrateInfo,
+                        }
+                        if let Ok(crates_resp) = resp.json::<CratesIoResponse>().await {
+                            let latest = crates_resp.krate.max_version;
+                            if current != latest && !latest.is_empty() {
+                                let is_newer = if let (Ok(cur), Ok(lat)) = (
+                                    semver::Version::parse(&current),
+                                    semver::Version::parse(&latest),
+                                ) {
+                                    lat > cur
+                                } else {
+                                    current != latest
+                                };
 
-                                    if is_newer {
-                                        return Some(Dependency {
-                                            name,
-                                            current_version: current,
-                                            latest_version: latest,
-                                            ecosystem: Ecosystem::Cargo,
-                                            is_global: true,
-                                        });
-                                    }
+                                if is_newer {
+                                    return Some(Dependency {
+                                        name,
+                                        current_version: current,
+                                        latest_version: latest,
+                                        ecosystem: Ecosystem::Cargo,
+                                        is_global: true,
+                                    });
                                 }
                             }
                         }
                     }
-                    Err(_) => {}
                 }
                 None
             }));
@@ -195,7 +195,9 @@ impl GlobalAdapter {
         }
 
         let mut deps = Vec::new();
-        if let Ok(parsed) = serde_json::from_str::<std::collections::HashMap<String, PkgItem>>(&stdout_str) {
+        if let Ok(parsed) =
+            serde_json::from_str::<std::collections::HashMap<String, PkgItem>>(&stdout_str)
+        {
             for (name, item) in parsed {
                 let current = item.current.unwrap_or_else(|| "Unknown".to_string());
                 let latest = item.latest.unwrap_or_else(|| "Unknown".to_string());
@@ -215,10 +217,7 @@ impl GlobalAdapter {
     }
 
     async fn check_bun_global(&self) -> Result<Vec<Dependency>> {
-        let output = Command::new("bun")
-            .args(["pm", "ls", "-g"])
-            .output()
-            .await;
+        let output = Command::new("bun").args(["pm", "ls", "-g"]).output().await;
 
         let output = match output {
             Ok(out) => out,

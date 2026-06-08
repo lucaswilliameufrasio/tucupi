@@ -1,8 +1,8 @@
 use crate::models::{Dependency, Ecosystem};
+use anyhow::{Context, Result};
+use serde_json::Value;
 use std::path::Path;
 use tokio::process::Command;
-use anyhow::{Result, Context};
-use serde_json::Value;
 
 pub struct DartAdapter;
 
@@ -27,19 +27,29 @@ impl DartAdapter {
             return Ok(Vec::new());
         }
 
-        let parsed: Value = serde_json::from_slice(&output.stdout)
-            .context("Failed to parse dart pub JSON")?;
+        let parsed: Value =
+            serde_json::from_slice(&output.stdout).context("Failed to parse dart pub JSON")?;
 
         let mut deps = Vec::new();
 
         if let Some(packages) = parsed["packages"].as_array() {
             for pkg in packages {
                 let name = pkg["package"].as_str().unwrap_or("Unknown").to_string();
-                let current = pkg["current"]["version"].as_str().unwrap_or("Unknown").to_string();
-                
+                let current = pkg["current"]["version"]
+                    .as_str()
+                    .unwrap_or("Unknown")
+                    .to_string();
+
                 if let Some(upgradable) = pkg.get("upgradable") {
-                    let latest = upgradable["version"].as_str().unwrap_or("Unknown").to_string();
-                    if !name.is_empty() && name != "Unknown" && current != latest && latest != "Unknown" {
+                    let latest = upgradable["version"]
+                        .as_str()
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    if !name.is_empty()
+                        && name != "Unknown"
+                        && current != latest
+                        && latest != "Unknown"
+                    {
                         deps.push(Dependency {
                             name,
                             current_version: current,
