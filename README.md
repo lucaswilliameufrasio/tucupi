@@ -1,105 +1,214 @@
-# 🍵 tucupi
+# 🍵 Tucupi
 
-**tucupi** é uma ferramenta interativa TUI (Terminal User Interface) desenvolvida em Rust com Ratatui para **verificação concorrente e upgrade de dependências** com auditoria de segurança integrada e travas de política local.
+> A concurrent dependency checker and upgrader with built-in security auditing.
 
----
+Tucupi scans your local project dependencies and globally installed packages across multiple ecosystems, checks the OSV.dev vulnerability database for target versions, and either safely upgrades or warns/blocks based on your local security policy.
 
-## 🇧🇷 O Significado do Nome
+## 🤔 Why "Tucupi"?
 
-No Pará, o **tucupi** é um sumo amarelo extraído da raiz da mandioca brava. Em seu estado natural/cru, o suco contém ácido cianídrico e é extremamente **tóxico** (altamente perigoso para o consumo). Para que possa ser utilizado na culinária nortista (em pratos tradicionais como o *Pato no Tucupi* ou o *Tacacá*), ele precisa ser **fervido por horas para eliminar o veneno** e ser depurado.
+In the Amazon region of Pará (Brazil), **tucupi** is a yellow broth extracted from the root of wild manioc. In its raw state, it contains hydrocyanic acid and is extremely **toxic**. To be used in northern cuisine (such as *Pato no Tucupi* or *Tacacá*), it must be **boiled for hours** to eliminate the poison.
 
-Esta é a analogia perfeita para a nossa ferramenta:
-- As dependências brutas/desatualizadas de um projeto podem ser "tóxicas" (conter vulnerabilidades graves).
-- O **`tucupi`** age como a fervura e depuração: ele verifica, audita as vulnerabilidades no banco de dados da OSV.dev de forma concorrente e só permite o upgrade das dependências quando elas estiverem totalmente purificadas e seguras (ou sob aprovação explícita de travamento).
+This is the perfect metaphor for dependency management:
+- Outdated/unmanaged dependencies can be "toxic" (contain severe vulnerabilities).
+- **Tucupi** acts as the boiling and purification process: it checks dependencies, audits vulnerabilities against the OSV.dev database concurrently, and only allows upgrades when dependencies are fully verified — or under explicit policy override.
 
----
+## ✨ Features
 
-## 🚀 Funcionalidades
+- **Multi-Ecosystem Support (8 ecosystems):**
+  - **Rust (Cargo)**: reads `Cargo.toml`, queries crates.io API.
+  - **Go (Modules)**: runs `go list -u -m -json all`.
+  - **Dart (Pub)**: runs `dart pub outdated --json`.
+  - **Elixir (Hex)**: runs `mix hex.outdated`.
+  - **Node/Bun/Deno/Pnpm/Yarn (NPM Registry)**: reads `package.json` or `deno.json(c)` and resolves concurrently.
+  - **PHP (Composer)**: runs `composer outdated --format=json`.
+  - **Ruby (Bundler)**: runs `bundle outdated --parseable`.
+  - **Python (pip)**: runs `pip3 list --outdated --format=json`.
 
-- **Auditoria de Segurança Integrada (OSV.dev)**: Consulta o banco de vulnerabilidades do Open Source Vulnerabilities de maneira assíncrona.
-- **Multilinguagem (Ecosystem Adapters)**:
-  - **Rust (Cargo)**: Lê dependências e devDependencies e consulta a API oficial do crates.io.
-  - **Go (Modules)**: Executa `go list -u -m -json all`.
-  - **Dart (Pub)**: Executa `dart pub outdated --json`.
-  - **Elixir (Hex)**: Executa `mix hex.outdated`.
-  - **Node/Bun/Deno (NPM Registry)**: Lê `package.json` ou `deno.json(c)` e resolve concorrentemente direto da API do NPM.
-- **Upgrade de Dependências Globais**:
-  - Varre e executa upgrades de ferramentas globais do sistema (`npm -g`, `pnpm -g`, `cargo install`).
-- **Travamento de Segurança (`tucupi.toml`)**:
-  - Se a regra `block_vulnerable = true` for adicionada, atualizações para versões com vulnerabilidades conhecidas serão **terminantemente bloqueadas**.
-- **Modo Forçado**:
-  - Se o bloqueio não estiver ativo, o usuário é alertado em uma janela modal com as vulnerabilidades encontradas (IDs CVE/GHSA) e pode decidir forçar o upgrade.
-- **Execução Concorrente**:
-  - Processos e conexões web assíncronas rodando em cima da runtime do `tokio`.
+- **Global Packages & System Tools:**
+  - npm/pnpm/bun global packages, cargo installed tools.
+  - **Arch Linux**: paru/pacman (official + AUR packages).
+  - **mise** (version manager): detects and upgrades outdated tools.
 
----
+- **Security Auditing (OSV.dev):**
+  - Asynchronously queries the Open Source Vulnerabilities database.
+  - Blocks upgrades to vulnerable versions when `block_vulnerable = true` in config.
+  - Shows a warning modal with CVE/GHSA IDs, allows force upgrade if policy permits.
 
-## 📂 Configurações de Política (`tucupi.toml`)
+- **Interactive Batch Mode (`--interactive`):**
+  - npm-check-style multi-select checklist using Space/arrows.
+  - Three-state selection: `[ ]` skip → `[✓]` safe upgrade → `[⚡]` force upgrade.
+  - Runs all selected upgrades and shows a final report.
 
-Você pode colocar um arquivo `tucupi.toml` na raiz do seu repositório para impor políticas de segurança ao time:
+- **Security-only Check Mode:**
+  - Press `c` to audit a dependency without upgrading.
+
+- **Concurrent Execution:**
+  - All network requests and upgrade processes run concurrently via `tokio`.
+  - Adapter scanning runs in parallel via `tokio::join!`.
+
+- **Configurable Security Policy (`tucupi.toml`):**
+  - Place a `tucupi.toml` in your project root to enforce policies.
+  - `block_vulnerable`: block upgrades to vulnerable versions.
+  - `ignored_packages`: skip security checks for specific packages.
+  - `ignored_vulnerabilities`: ignore specific CVEs/GHSAs.
+
+- **Internationalization:**
+  - Auto-detects `pt-BR` or `en` from `LANG`/`LC_ALL` environment variables.
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- [Rust toolchain](https://rustup.rs/) (1.75+)
+
+### Installation
+
+Build from source:
+
+```bash
+cargo install --git https://github.com/lucaswilliameufrasio/tucupi
+```
+
+Or with cargo-binstall:
+
+```bash
+cargo binstall tucupi
+```
+
+### Upgrade
+
+Build from the latest source:
+
+```bash
+cargo install --git https://github.com/lucaswilliameufrasio/tucupi
+```
+
+Verify:
+
+```bash
+tucupi --help
+```
+
+### Usage
+
+Scan the current directory and open the TUI:
+
+```bash
+tucupi
+```
+
+Scan a specific project:
+
+```bash
+tucupi /path/to/project
+```
+
+Analyse global packages instead of local project:
+
+```bash
+tucupi --global
+```
+
+Interactive batch mode (npm-check style):
+
+```bash
+tucupi --interactive
+```
+
+## ⌨️ TUI Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Toggle Local/Global packages tab |
+| `↑` / `↓` | Navigate dependency list |
+| `r` | Re-scan dependencies |
+| `u` | Safe upgrade (with security audit) |
+| `f` | Force upgrade (bypass warnings) |
+| `c` | Check security only (no upgrade) |
+| `Esc` / `Enter` | Close modal dialogs |
+| `q` | Quit |
+
+### Interactive Batch Mode Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Navigate list |
+| `Space` | Cycle selection: `[ ]` → `[✓]` → `[⚡]` |
+| `Enter` | Execute all selected upgrades |
+| `q` | Quit |
+
+## 📂 Security Policy (`tucupi.toml`)
+
+Place a `tucupi.toml` in your project root:
 
 ```toml
 [security]
-# Bloquear o upgrade caso a versão alvo possua vulnerabilidades conhecidas
+# Block upgrades if the target version has known vulnerabilities
 block_vulnerable = true
 
-# Ignorar checagem para pacotes específicos
-ignored_packages = ["algum-pacote-legado"]
+# Skip security checks for specific packages
+ignored_packages = ["legacy-package"]
 
-# Ignorar CVEs ou GHSAs específicos que já foram mitigados internamente
+# Ignore specific CVEs or GHSAs already mitigated internally
 ignored_vulnerabilities = ["GHSA-xxxx-yyyy-zzzz", "CVE-2026-1234"]
 ```
 
----
+## 🔧 Development
 
-## 🛠️ Como Executar e Testar
+### Build
 
-### Pré-requisitos
-- Rust & Cargo instalados (Mínimo Rust 1.75+)
-
-### Compilar o projeto
 ```bash
 cargo build --release
 ```
 
-### Executar os Testes
-Para rodar os testes unitários e de integração (que fazem testes reais de scanner e OSV):
+### Run tests
+
 ```bash
 cargo test
 ```
 
-### Rodar a aplicação
-Na pasta raiz de um projeto:
-```bash
-cargo run
-```
-
-Para analisar as dependências globais do sistema ao invés do projeto local:
-```bash
-cargo run -- --global
-```
-
-### Gerenciamento de Releases (`cargo-dist`)
-Para configurar a distribuição automatizada e pipelines de release, é altamente recomendado instalar o `cargo-dist` utilizando o `cargo-binstall` de forma segura (garantindo validação de assinaturas e criptografia ponta a ponta):
+### Code quality
 
 ```bash
-# Instalar cargo-dist de forma segura
-cargo binstall cargo-dist --secure
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Para atualizar o setup ou sincronizar as pipelines locais/CI do `tucupi`:
+## 🏗️ Architecture
+
+```
+src/
+├── main.rs           Entry point, CLI arg parsing, mode routing
+├── lib.rs            Library crate exporting all modules
+├── app.rs            Application state machine, upgrade orchestration
+├── batch.rs          Interactive batch mode (--interactive)
+├── ui.rs             TUI rendering (ratatui)
+├── config.rs         tucupi.toml parser
+├── models.rs         Core types (Ecosystem, Dependency, Vulnerability)
+├── security.rs       OSV.dev vulnerability checker
+├── i18n.rs           Internationalization (pt-BR / en)
+└── adapters/         Ecosystem-specific outdated checkers
+    ├── cargo.rs, go.rs, dart.rs, elixir.rs, js_ts.rs
+    ├── php.rs, ruby.rs, python.rs, pacman.rs, mise.rs
+    └── global.rs     npm/pnpm/bun/cargo global packages
+```
+
+## Verify Release Checksums
+
+Each GitHub Release includes `tucupi` binary and a `.sha256` checksum file:
+
 ```bash
-dist init --yes
+sha256sum -c tucupi-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
----
+macOS:
 
-## ⌨️ Atalhos de Navegação na TUI
+```bash
+shasum -a 256 -c tucupi-vX.Y.Z-x86_64-apple-darwin.tar.gz.sha256
+```
 
-- `Tab`: Alternar entre a aba **[Local Project]** (dependências do diretório atual) e **[Global Packages]** (pacotes do sistema).
-- `Setas Cima / Baixo`: Navegar pela lista de pacotes desatualizados.
-- `r`: Recarregar e rodar uma nova varredura concorrente.
-- `u`: Iniciar Upgrade Seguro (roda auditoria OSV.dev e instala se seguro).
-- `f`: Forçar Upgrade (permite forçar mesmo com alertas, caso não haja bloqueio em `tucupi.toml`).
-- `Esc` / `Enter`: Fechar janelas modais de bloqueio ou confirmação.
-- `q`: Sair do Tucupi.
+## Release Process
+
+- Changelog: [CHANGELOG.md](./CHANGELOG.md)
+- Architecture docs: [docs/architecture.md](./docs/architecture.md)
+- Security policy: [SECURITY.md](./SECURITY.md)
