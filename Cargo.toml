@@ -1,6 +1,6 @@
 [package]
 name = "tucupi"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Lucas Eufrasio <lucaseufrasio@gmail.com>"]
 description = "A concurrent dependency checker and upgrader with built-in security auditing."
