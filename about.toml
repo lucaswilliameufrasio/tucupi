@@ -1,4 +1,4 @@
-accept = [
+accepted = [
     "Apache-2.0",
     "MIT",
     "Zlib",
@@ -10,6 +10,5 @@ accept = [
     "MPL-2.0",
     "OpenSSL",
 ]
-targets = [
-    { triple = "x86_64-unknown-linux-gnu", runtime = false },
-]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
