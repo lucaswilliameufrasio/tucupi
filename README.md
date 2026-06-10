@@ -212,3 +212,14 @@ shasum -a 256 -c tucupi-vX.Y.Z-x86_64-apple-darwin.tar.gz.sha256
 - Changelog: [CHANGELOG.md](./CHANGELOG.md)
 - Architecture docs: [docs/architecture.md](./docs/architecture.md)
 - Security policy: [SECURITY.md](./SECURITY.md)
+
+### Before releasing a new version
+
+Run `cargo about init` to regenerate the `about.toml` with the correct list of
+accepted third-party licenses based on the current dependency tree:
+
+```bash
+cargo about init
+```
+
+Commit any changes to `about.toml` before tagging the release.
