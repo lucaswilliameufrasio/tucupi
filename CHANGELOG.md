@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.
 
 
+### <!-- 1 -->🐛 Bug Fixes
+
+- Add allow-dirty = ["ci"] to dist-workspace.toml
+- Correct about.toml format for cargo-about
+
+### <!-- 3 -->📚 Documentation
+
+- Add cargo about init step to release process in README
+
+### <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Sync workflows and README with acari
+
 ### <!-- 0 -->🚀 Features
 
 - Initialize tucupi concurrent dependency guard TUI app
