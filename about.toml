@@ -9,6 +9,5 @@ accepted = [
     "CC0-1.0",
     "MPL-2.0",
     "OpenSSL",
+    "CDLA-Permissive-2.0",
 ]
-ignore-build-dependencies = true
-ignore-dev-dependencies = true
