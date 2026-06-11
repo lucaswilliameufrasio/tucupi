@@ -353,16 +353,32 @@ impl App {
     }
 
     fn start_upgrade(&mut self, dep: Dependency) {
+        let is_cargo_local = !dep.is_global && dep.ecosystem == Ecosystem::Cargo;
         self.status = AppStatus::Upgrading(format!(
             "Upgrading {} to {}...",
             dep.name, dep.latest_version
         ));
         let tx = self.event_tx.clone();
         let target_dir = self.target_dir.clone();
+        let dep_name = dep.name.clone();
 
         tokio::spawn(async move {
             let (cmd, args) = get_upgrade_cmd(&dep, &target_dir);
-            let result = run_upgrade_process(&cmd, args, &target_dir).await;
+            let mut result = run_upgrade_process(&cmd, args, &target_dir).await;
+
+            if result.is_ok() && is_cargo_local {
+                // After cargo add, run cargo update to sync the lockfile
+                let update_args = vec!["update".to_string(), "-p".to_string(), dep_name.clone()];
+                let fetch_result = run_upgrade_process("cargo", update_args, &target_dir).await;
+                if let Err(e) = fetch_result {
+                    result = Err(e
+                        .lines()
+                        .next()
+                        .unwrap_or("cargo update failed")
+                        .to_string());
+                }
+            }
+
             let _ = tx.send(AppEvent::UpgradeFinished(result));
         });
     }
@@ -475,7 +491,14 @@ pub(crate) fn get_upgrade_cmd(dep: &Dependency, target_dir: &Path) -> (String, V
                     "--force".to_string(),
                 ],
             ),
-            Ecosystem::Pacman => ("paru".to_string(), vec!["-S".to_string(), dep.name.clone()]),
+            Ecosystem::Pacman => (
+                "paru".to_string(),
+                vec![
+                    "-S".to_string(),
+                    "--noconfirm".to_string(),
+                    dep.name.clone(),
+                ],
+            ),
             Ecosystem::Mise => (
                 "mise".to_string(),
                 vec![
@@ -599,13 +622,21 @@ pub(crate) async fn run_upgrade_process(
     args: Vec<String>,
     dir: &Path,
 ) -> Result<(), String> {
-    let output = tokio::process::Command::new(cmd)
-        .args(&args)
-        .current_dir(dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        tokio::process::Command::new(cmd)
+            .args(&args)
+            .current_dir(dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await;
+
+    let output = match output {
+        Ok(out) => out,
+        Err(_timeout) => return Err("Process timed out after 120 seconds.".to_string()),
+    };
 
     match output {
         Ok(out) => {
