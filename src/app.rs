@@ -103,7 +103,7 @@ impl App {
             return;
         }
         let current = self.table_state.selected().unwrap_or(0);
-        let next = (current + 1) % len;
+        let next = (current + 1).min(len.saturating_sub(1));
         self.table_state.select(Some(next));
     }
 
@@ -114,7 +114,7 @@ impl App {
             return;
         }
         let current = self.table_state.selected().unwrap_or(0);
-        let prev = if current == 0 { len - 1 } else { current - 1 };
+        let prev = current.saturating_sub(1);
         self.table_state.select(Some(prev));
     }
 

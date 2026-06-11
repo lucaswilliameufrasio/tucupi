@@ -262,10 +262,18 @@ pub fn render(f: &mut Frame, app: &mut App) {
             vuln_section.push_str(t("select_prompt"));
         }
 
-        let vuln_style = match &app.status {
-            AppStatus::UpgradeFailed(_, _) => Style::default().fg(Color::LightRed),
-            _ => Style::default().fg(Color::DarkGray),
-        };
+        let vuln_style =
+            if vuln_section.contains("ERRO DE UPGRADE") || vuln_section.contains("Falha") {
+                Style::default().fg(Color::LightRed)
+            } else if vuln_section.contains("AVISO") {
+                Style::default().fg(Color::Yellow)
+            } else if vuln_section.contains("SEGURO") {
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
         let vuln_widget = Paragraph::new(vuln_section)
             .style(vuln_style)
             .wrap(Wrap { trim: true });
