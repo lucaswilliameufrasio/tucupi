@@ -63,6 +63,11 @@ impl SecurityChecker {
             .context("Failed to send request to OSV.dev")?;
 
         if !response.status().is_success() {
+            let status_code = response.status();
+            // 400 means the ecosystem is not recognized by OSV.dev — not an error
+            if status_code == 400 || status_code == 404 {
+                return Ok(Vec::new());
+            }
             return Err(anyhow::anyhow!(
                 "OSV.dev returned status {}",
                 response.status()

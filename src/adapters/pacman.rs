@@ -38,7 +38,11 @@ impl PacmanAdapter {
                         if let Some((current, latest)) = version_info.split_once(" -> ") {
                             let current_version = current.to_string();
                             let latest_version = latest.to_string();
-                            if current_version != latest_version && latest_version != "Unknown" {
+                            if current_version != latest_version
+                                && latest_version != "Unknown"
+                                && !latest_version.contains("commit")
+                                && !latest_version.contains("latest")
+                            {
                                 deps.push(Dependency {
                                     name,
                                     current_version,
@@ -72,6 +76,8 @@ impl PacmanAdapter {
                             let latest_version = latest.to_string();
                             if current_version != latest_version
                                 && latest_version != "Unknown"
+                                && !latest_version.contains("commit")
+                                && !latest_version.contains("latest")
                                 && !deps.iter().any(|d: &Dependency| d.name == name)
                             {
                                 deps.push(Dependency {
