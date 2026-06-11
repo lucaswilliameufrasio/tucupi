@@ -9,7 +9,7 @@ license = "MIT"
 default-run = "tucupi"
 
 [dependencies]
-ratatui = "0.30.0"
+ratatui = "0.30.1"
 crossterm = "0.29.0"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "process", "fs", "io-util"] }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -18,7 +18,10 @@ reqwest = { version = "0.13.4", features = ["json"] }
 toml = "1.1.2"
 anyhow = "1.0.102"
 semver = "1.0.28"
-thiserror = "2.0"
+thiserror = "2.0.18"
+tempfile = "3.27.0"
+predicates = "3.1.4"
+assert_cmd = "2.2.2"
 
 [dev-dependencies]
 assert_cmd = "2.0"
