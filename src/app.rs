@@ -354,6 +354,7 @@ impl App {
 
     fn start_upgrade(&mut self, dep: Dependency) {
         let is_cargo_local = !dep.is_global && dep.ecosystem == Ecosystem::Cargo;
+        let pipe_upgrade = !dep.is_global;
         self.status = AppStatus::Upgrading(format!(
             "Upgrading {} to {}...",
             dep.name, dep.latest_version
@@ -364,12 +365,13 @@ impl App {
 
         tokio::spawn(async move {
             let (cmd, args) = get_upgrade_cmd(&dep, &target_dir);
-            let mut result = run_upgrade_process(&cmd, args, &target_dir).await;
+            let mut result = run_upgrade_process(&cmd, args, &target_dir, pipe_upgrade).await;
 
             if result.is_ok() && is_cargo_local {
                 // After cargo add, run cargo update to sync the lockfile
                 let update_args = vec!["update".to_string(), "-p".to_string(), dep_name.clone()];
-                let fetch_result = run_upgrade_process("cargo", update_args, &target_dir).await;
+                let fetch_result =
+                    run_upgrade_process("cargo", update_args, &target_dir, true).await;
                 if let Err(e) = fetch_result {
                     result = Err(e
                         .lines()
@@ -621,7 +623,31 @@ pub(crate) async fn run_upgrade_process(
     cmd: &str,
     args: Vec<String>,
     dir: &Path,
+    pipe: bool,
 ) -> Result<(), String> {
+    if !pipe {
+        let mut child = tokio::process::Command::new(cmd)
+            .args(&args)
+            .current_dir(dir)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| format!("Failed to start process: {}", e))?;
+
+        let status = tokio::time::timeout(std::time::Duration::from_secs(120), child.wait())
+            .await
+            .map_err(|_| "Process timed out after 120 seconds.".to_string())?
+            .map_err(|e| format!("Failed to wait for process: {}", e))?;
+
+        if status.success() {
+            return Ok(());
+        }
+        let exit_code = status
+            .code()
+            .map_or("unknown".to_string(), |c| c.to_string());
+        return Err(format!("Process failed with exit code {}", exit_code));
+    }
+
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(120),
         tokio::process::Command::new(cmd)

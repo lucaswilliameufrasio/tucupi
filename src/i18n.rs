@@ -42,6 +42,7 @@ fn pt_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("upgrade_none", " Nenhum upgrade em andamento.");
         m.insert("error_details", " ❌ DETALHES DO ERRO DE UPGRADE:\n{0}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
         m.insert("secure_msg", " ✓ SEGURO: Nenhuma vulnerabilidade conhecida foi detectada no banco de dados do OSV.dev para esta versão.");
+        m.insert("secure_limited", " ⚠️ Auditoria indisponível para este ecossistema — não foi possível verificar vulnerabilidades.");
         m.insert("vuln_warning", " ⚠️ AVISO: {0} VULNERABILIDADE(S) ENCONTRADA(S)!\n\n");
         m.insert("vuln_item", "ID: {0} ({1})\nSumário: {2}\nDetalhes: {3}\n----------------------------------------\n");
         m.insert("audit_failed", " ❌ Falha na auditoria de segurança:\n{0}\n\nVerifique sua conexão de rede. A política local de segurança pode bloquear upgrades se não for possível validar a segurança.");
@@ -126,6 +127,7 @@ fn en_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("upgrade_none", " No upgrade in progress.");
         m.insert("error_details", " ❌ UPGRADE ERROR DETAILS:\n{0}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
         m.insert("secure_msg", " ✓ SECURE: No known vulnerabilities detected in the OSV.dev database for this version.");
+        m.insert("secure_limited", " ⚠️ Security audit unavailable for this ecosystem — could not verify vulnerabilities.");
         m.insert("vuln_warning", " ⚠️ WARNING: {0} VULNERABILITIES FOUND!\n\n");
         m.insert("vuln_item", "ID: {0} ({1})\nSummary: {2}\nDetails: {3}\n----------------------------------------\n");
         m.insert("audit_failed", " ❌ Security audit failed:\n{0}\n\nCheck your network connection. The local security policy may block upgrades if security cannot be validated.");

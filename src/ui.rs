@@ -237,7 +237,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
                         .collect();
 
                     if active_vulns.is_empty() {
-                        vuln_section.push_str(t("secure_msg"));
+                        let is_limited =
+                            matches!(dep.ecosystem, Ecosystem::Pacman | Ecosystem::Mise);
+                        if is_limited {
+                            vuln_section.push_str(t("secure_limited"));
+                        } else {
+                            vuln_section.push_str(t("secure_msg"));
+                        }
                     } else {
                         vuln_section
                             .push_str(&tf("vuln_warning", &[&active_vulns.len().to_string()]));
@@ -262,10 +268,12 @@ pub fn render(f: &mut Frame, app: &mut App) {
             vuln_section.push_str(t("select_prompt"));
         }
 
+        let has_limited_audit = matches!(dep.ecosystem, Ecosystem::Pacman | Ecosystem::Mise);
+
         let vuln_style =
             if vuln_section.contains("ERRO DE UPGRADE") || vuln_section.contains("Falha") {
                 Style::default().fg(Color::LightRed)
-            } else if vuln_section.contains("AVISO") {
+            } else if vuln_section.contains("AVISO") || has_limited_audit {
                 Style::default().fg(Color::Yellow)
             } else if vuln_section.contains("SEGURO") {
                 Style::default()

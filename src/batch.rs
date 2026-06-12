@@ -353,11 +353,12 @@ fn spawn_upgrade(
     target_dir: &Path,
     event_tx: &mpsc::UnboundedSender<BatchEvent>,
 ) {
+    let pipe = !dependency.is_global;
     let (command, args) = get_upgrade_cmd(dependency, target_dir);
     let upgrade_tx = event_tx.clone();
     let target = target_dir.to_path_buf();
     tokio::spawn(async move {
-        let upgrade_result = run_upgrade_process(&command, args, &target).await;
+        let upgrade_result = run_upgrade_process(&command, args, &target, pipe).await;
         let _ = upgrade_tx.send(BatchEvent::UpgradeFinished(index, upgrade_result));
     });
 }

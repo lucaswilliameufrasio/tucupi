@@ -43,7 +43,11 @@ impl MiseAdapter {
                 let current_version = parts[1].to_string();
                 let latest_version = parts[2].to_string();
 
-                if current_version != latest_version && latest_version != "Unknown" {
+                if current_version != latest_version
+                    && latest_version != "Unknown"
+                    && !latest_version.contains("latest")
+                    && !latest_version.contains("--")
+                {
                     deps.push(Dependency {
                         name,
                         current_version,
