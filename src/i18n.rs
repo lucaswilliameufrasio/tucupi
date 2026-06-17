@@ -104,6 +104,7 @@ fn pt_strings() -> &'static HashMap<&'static str, &'static str> {
         // provenance
         m.insert("provenance_title", " 🛡 Proveniência");
         m.insert("provenance_signed", " ✓ Assinado por {0}");
+        m.insert("provenance_signed_unknown", " ✓ Assinado (verificado)");
         m.insert("provenance_unsigned", " ✗ Não verificado por assinatura");
         m.insert("provenance_install_date", " 📅 Instalado em: {0}");
         // fix suggestions
@@ -205,6 +206,7 @@ fn en_strings() -> &'static HashMap<&'static str, &'static str> {
         // provenance
         m.insert("provenance_title", " 🛡 Provenance");
         m.insert("provenance_signed", " ✓ Signed by {0}");
+        m.insert("provenance_signed_unknown", " ✓ Signed (verified)");
         m.insert("provenance_unsigned", " ✗ Not signature-verified");
         m.insert("provenance_install_date", " 📅 Installed on: {0}");
         // fix suggestions

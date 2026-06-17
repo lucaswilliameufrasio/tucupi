@@ -1,8 +1,8 @@
 use crate::adapters::{check_all_outdated, check_global_outdated};
 use crate::config::Config;
 use crate::i18n::t;
-use crate::models::{Dependency, Ecosystem, VulnerabilityInfo};
-use crate::security::SecurityChecker;
+use crate::models::{Dependency, Ecosystem, ProvenanceInfo, VulnerabilityInfo};
+use crate::security::{check_provenance, SecurityChecker};
 use ratatui::widgets::TableState;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -34,6 +34,8 @@ pub enum Modal {
 pub enum AppEvent {
     ScanFinished(Tab, Vec<Dependency>),
     SecurityChecked(Dependency, Result<Vec<VulnerabilityInfo>, String>, bool),
+    FreshnessChecked(Dependency, Option<i64>),
+    ProvenanceChecked(Dependency, ProvenanceInfo),
     UpgradeFinished(Result<(), String>),
 }
 
@@ -48,6 +50,8 @@ pub struct App {
     pub status: AppStatus,
     pub modal: Modal,
     pub vuln_cache: HashMap<String, Result<Vec<VulnerabilityInfo>, String>>,
+    pub freshness_cache: HashMap<String, Option<i64>>,
+    pub provenance_cache: HashMap<String, ProvenanceInfo>,
     pub security_check_only: bool,
     pub batch_scan_pending: usize,
 
@@ -74,6 +78,8 @@ impl App {
             status: AppStatus::Ready,
             modal: Modal::None,
             vuln_cache: HashMap::new(),
+            freshness_cache: HashMap::new(),
+            provenance_cache: HashMap::new(),
             security_check_only: false,
             batch_scan_pending: 0,
             event_tx,
@@ -137,6 +143,8 @@ impl App {
         self.local_deps.clear();
         self.global_deps.clear();
         self.vuln_cache.clear();
+        self.freshness_cache.clear();
+        self.provenance_cache.clear();
         self.batch_scan_pending = 0;
         self.table_state.select(None);
 
@@ -167,30 +175,62 @@ impl App {
             .cloned()
             .collect();
 
-        let targets: Vec<(Dependency, u64)> = all_deps
-            .into_iter()
-            .filter(|d| d.ecosystem.has_osv_coverage())
-            .map(|d| (d, self.config.osv_timeout_secs()))
-            .collect();
+        let timeout = self.config.osv_timeout_secs();
+        let threshold = self.config.freshness_threshold_days();
+        let nvd_key = self.config.nvd_api_key();
 
-        self.batch_scan_pending = targets.len();
-        if self.batch_scan_pending == 0 {
-            return;
-        }
+        for dep in &all_deps {
+            let cache_key = format!(
+                "{}_{}_{}",
+                dep.ecosystem.as_str(),
+                dep.name,
+                dep.latest_version
+            );
 
-        for (dep, timeout) in targets {
-            let tx = self.event_tx.clone();
-            tokio::spawn(async move {
-                let checker = SecurityChecker::new_with_config(timeout);
-                let result = checker
-                    .check_vulnerability(&dep.name, &dep.latest_version, dep.ecosystem)
-                    .await;
-                let _ = tx.send(AppEvent::SecurityChecked(
-                    dep,
-                    result.map_err(|e| e.to_string()),
-                    true,
-                ));
-            });
+            // OSV + NVD check
+            if dep.ecosystem.has_osv_coverage() {
+                self.batch_scan_pending += 1;
+                let tx = self.event_tx.clone();
+                let d = dep.clone();
+                let key = nvd_key.clone();
+                tokio::spawn(async move {
+                    let checker = SecurityChecker::new_with_config(timeout, key);
+                    let result = checker
+                        .check_vulnerability(&d.name, &d.latest_version, d.ecosystem)
+                        .await;
+                    let _ = tx.send(AppEvent::SecurityChecked(
+                        d,
+                        result.map_err(|e| e.to_string()),
+                        true,
+                    ));
+                });
+            }
+
+            // Freshness check (cargo + npm)
+            if matches!(dep.ecosystem, Ecosystem::Cargo | Ecosystem::Npm)
+                && !self.freshness_cache.contains_key(&cache_key)
+            {
+                let tx = self.event_tx.clone();
+                let d = dep.clone();
+                tokio::spawn(async move {
+                    let checker = SecurityChecker::new_with_config(timeout, None);
+                    let age = checker
+                        .check_freshness(&d.name, &d.latest_version, d.ecosystem, threshold)
+                        .await;
+                    let _ = tx.send(AppEvent::FreshnessChecked(d, age));
+                });
+            }
+
+            // Provenance check (pacman)
+            if dep.ecosystem == Ecosystem::Pacman && !self.provenance_cache.contains_key(&cache_key)
+            {
+                let tx = self.event_tx.clone();
+                let d = dep.clone();
+                tokio::spawn(async move {
+                    let info = check_provenance(&d.name, Ecosystem::Pacman).await;
+                    let _ = tx.send(AppEvent::ProvenanceChecked(d, info));
+                });
+            }
         }
     }
 
@@ -236,7 +276,10 @@ impl App {
 
         self.status = AppStatus::Upgrading(format!("Auditing security for {}...", dep.name));
         let tx = self.event_tx.clone();
-        let checker = SecurityChecker::new_with_config(self.config.osv_timeout_secs());
+        let checker = SecurityChecker::new_with_config(
+            self.config.osv_timeout_secs(),
+            self.config.nvd_api_key(),
+        );
         let d = dep.clone();
 
         tokio::spawn(async move {
@@ -286,7 +329,10 @@ impl App {
         self.security_check_only = true;
         self.status = AppStatus::Upgrading(format!("Auditing security for {}...", dep.name));
         let tx = self.event_tx.clone();
-        let checker = SecurityChecker::new_with_config(self.config.osv_timeout_secs());
+        let checker = SecurityChecker::new_with_config(
+            self.config.osv_timeout_secs(),
+            self.config.nvd_api_key(),
+        );
         let d = dep.clone();
 
         tokio::spawn(async move {
@@ -442,6 +488,24 @@ impl App {
             }
             AppEvent::SecurityChecked(dep, res, from_pre_scan) => {
                 self.process_security_result(dep, res, from_pre_scan);
+            }
+            AppEvent::FreshnessChecked(dep, age) => {
+                let cache_key = format!(
+                    "{}_{}_{}",
+                    dep.ecosystem.as_str(),
+                    dep.name,
+                    dep.latest_version
+                );
+                self.freshness_cache.insert(cache_key, age);
+            }
+            AppEvent::ProvenanceChecked(dep, info) => {
+                let cache_key = format!(
+                    "{}_{}_{}",
+                    dep.ecosystem.as_str(),
+                    dep.name,
+                    dep.latest_version
+                );
+                self.provenance_cache.insert(cache_key, info);
             }
             AppEvent::UpgradeFinished(res) => match res {
                 Ok(_) => {

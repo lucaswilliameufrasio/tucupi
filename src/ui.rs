@@ -273,6 +273,39 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
         let mut vuln_section = String::new();
 
+        // Freshness
+        if let Some(age) = app.freshness_cache.get(&cache_key).and_then(|o| *o) {
+            if age < app.config.freshness_threshold_days() {
+                vuln_section.push_str(&tf("freshness_warn", &[&age.to_string()]));
+            } else {
+                vuln_section.push_str(&tf(
+                    "freshness_ok",
+                    &[&app.config.freshness_threshold_days().to_string()],
+                ));
+            }
+            vuln_section.push('\n');
+        }
+
+        // Provenance
+        if let Some(info) = app.provenance_cache.get(&cache_key) {
+            vuln_section.push_str(t("provenance_title"));
+            vuln_section.push('\n');
+            if info.signature_verified {
+                if let Some(ref validator) = info.validated_by {
+                    vuln_section.push_str(&tf("provenance_signed", &[validator]));
+                } else {
+                    vuln_section.push_str(t("provenance_signed_unknown"));
+                }
+            } else {
+                vuln_section.push_str(t("provenance_unsigned"));
+            }
+            if let Some(ref install_date) = info.install_date {
+                vuln_section.push('\n');
+                vuln_section.push_str(&tf("provenance_install_date", &[install_date]));
+            }
+            vuln_section.push_str("\n\n");
+        }
+
         if let AppStatus::UpgradeFailed(ref name, ref err) = &app.status {
             if name == &dep.name {
                 vuln_section.push_str(&tf("error_details", &[err]));

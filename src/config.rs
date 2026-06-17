@@ -16,6 +16,8 @@ pub struct SecurityConfig {
     pub pre_scan_security: Option<bool>,
     #[serde(default)]
     pub freshness_threshold_days: Option<i64>,
+    #[serde(default)]
+    pub nvd_api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -73,6 +75,10 @@ impl Config {
 
     pub fn freshness_threshold_days(&self) -> i64 {
         self.security.freshness_threshold_days.unwrap_or(7)
+    }
+
+    pub fn nvd_api_key(&self) -> Option<String> {
+        self.security.nvd_api_key.clone()
     }
 }
 

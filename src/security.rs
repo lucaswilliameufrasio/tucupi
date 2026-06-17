@@ -25,6 +25,7 @@ struct OsvResponse {
 
 pub struct SecurityChecker {
     client: Client,
+    nvd_api_key: Option<String>,
 }
 
 impl Default for SecurityChecker {
@@ -35,22 +36,51 @@ impl Default for SecurityChecker {
 
 impl SecurityChecker {
     pub fn new() -> Self {
-        Self::new_with_config(5)
+        Self::new_with_config(5, None)
     }
 
-    pub fn new_with_config(timeout_secs: u64) -> Self {
+    pub fn new_with_config(timeout_secs: u64, nvd_api_key: Option<String>) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .unwrap_or_default();
-        Self { client }
+        Self {
+            client,
+            nvd_api_key,
+        }
     }
 
     pub fn from_config(config: &Config) -> Self {
-        Self::new_with_config(config.osv_timeout_secs())
+        Self::new_with_config(config.osv_timeout_secs(), config.nvd_api_key())
     }
 
     pub async fn check_vulnerability(
+        &self,
+        name: &str,
+        version: &str,
+        ecosystem: Ecosystem,
+    ) -> Result<Vec<VulnerabilityInfo>> {
+        let osv_future = self.check_osv(name, version, ecosystem);
+        let nvd_future = self.check_nvd(name, version);
+
+        let (osv_result, nvd_result) = tokio::join!(osv_future, nvd_future);
+
+        let mut all_vulns = osv_result.unwrap_or_default();
+        if let Ok(nvd_vulns) = nvd_result {
+            for nvd_vuln in nvd_vulns {
+                if !all_vulns
+                    .iter()
+                    .any(|v| v.id == nvd_vuln.id || v.aliases.contains(&nvd_vuln.id))
+                {
+                    all_vulns.push(nvd_vuln);
+                }
+            }
+        }
+
+        Ok(all_vulns)
+    }
+
+    async fn check_osv(
         &self,
         name: &str,
         version: &str,
@@ -97,6 +127,84 @@ impl SecurityChecker {
             serde_json::from_str(&body).context("Failed to parse OSV response JSON")?;
 
         let vulns = osv_res.vulns.into_iter().map(parse_osv_vuln).collect();
+        Ok(vulns)
+    }
+
+    async fn check_nvd(&self, name: &str, version: &str) -> Result<Vec<VulnerabilityInfo>> {
+        let search = format!("{} {}", name, version);
+        let url = reqwest::Url::parse_with_params(
+            "https://services.nvd.nist.gov/rest/json/cves/2.0",
+            &[
+                ("keywordSearch", &search),
+                ("keywordExactMatch", &"true".to_string()),
+            ],
+        )?;
+
+        let mut request = self.client.get(url);
+        if let Some(ref api_key) = self.nvd_api_key {
+            request = request.header("apiKey", api_key);
+        }
+
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            return Ok(Vec::new());
+        }
+
+        #[derive(Deserialize)]
+        struct NvdDesc {
+            #[serde(default)]
+            lang: String,
+            #[serde(default)]
+            value: String,
+        }
+
+        #[derive(Deserialize)]
+        struct NvdCve {
+            id: String,
+            #[serde(default)]
+            descriptions: Vec<NvdDesc>,
+        }
+
+        #[derive(Deserialize)]
+        struct NvdItem {
+            cve: NvdCve,
+        }
+
+        #[derive(Deserialize)]
+        struct NvdResponse {
+            #[serde(default)]
+            vulnerabilities: Vec<NvdItem>,
+        }
+
+        let body = response.text().await.unwrap_or_default();
+        let nvd_res: NvdResponse = match serde_json::from_str(&body) {
+            Ok(r) => r,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        let vulns = nvd_res
+            .vulnerabilities
+            .into_iter()
+            .map(|item| {
+                let summary = item
+                    .cve
+                    .descriptions
+                    .iter()
+                    .find(|d| d.lang == "en")
+                    .map(|d| d.value.clone())
+                    .unwrap_or_default();
+                let truncated: String = summary.chars().take(200).collect();
+                VulnerabilityInfo {
+                    id: item.cve.id,
+                    summary: truncated.clone(),
+                    details: summary,
+                    aliases: Vec::new(),
+                    severity: None,
+                    score: None,
+                }
+            })
+            .collect();
+
         Ok(vulns)
     }
 
@@ -251,7 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_osv_security_checker() {
-        let checker = SecurityChecker::new();
+        let checker = SecurityChecker::new_with_config(10, None);
         let vulns = checker
             .check_vulnerability("rustls", "0.20.0", Ecosystem::Cargo)
             .await;
