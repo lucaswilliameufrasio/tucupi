@@ -20,6 +20,30 @@ fn eco_color(ecosystem: Ecosystem) -> Color {
         Ecosystem::Python => Color::Cyan,
         Ecosystem::Pacman => Color::Cyan,
         Ecosystem::Mise => Color::LightBlue,
+        Ecosystem::Homebrew => Color::White,
+    }
+}
+
+fn vuln_count_style(count: usize) -> Style {
+    match count {
+        0 => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        1..=2 => Style::default().fg(Color::Yellow),
+        _ => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    }
+}
+
+fn severity_label(severity: Option<&str>) -> String {
+    match severity {
+        Some(s) => match s.to_uppercase().as_str() {
+            "CRITICAL" => t("severity_critical").to_string(),
+            "HIGH" => t("severity_high").to_string(),
+            "MEDIUM" => t("severity_medium").to_string(),
+            "LOW" => t("severity_low").to_string(),
+            _ => s.to_string(),
+        },
+        None => String::new(),
     }
 }
 
@@ -115,6 +139,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         t("col_package"),
         t("col_current"),
         t("col_latest"),
+        t("col_vulns"),
     ];
     let header = Row::new(header_cells)
         .style(
@@ -128,12 +153,37 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .iter()
         .map(|dep| {
             let color = eco_color(dep.ecosystem);
+            let cache_key = format!(
+                "{}_{}_{}",
+                dep.ecosystem.as_str(),
+                dep.name,
+                dep.latest_version
+            );
+            let vuln_count = app.vuln_cache.get(&cache_key).map_or(0, |res| match res {
+                Ok(vulns) => vulns
+                    .iter()
+                    .filter(|v| !app.config.is_vulnerability_ignored(&v.id))
+                    .count(),
+                Err(_) => 0,
+            });
+            let vuln_label =
+                if app.batch_scan_pending > 0 && !app.vuln_cache.contains_key(&cache_key) {
+                    "…".to_string()
+                } else if vuln_count > 0 {
+                    vuln_count.to_string()
+                } else if dep.ecosystem.has_osv_coverage() {
+                    "✓".to_string()
+                } else {
+                    "-".to_string()
+                };
+
             Row::new(vec![
                 Cell::from(dep.ecosystem.as_str().to_string())
                     .style(Style::default().fg(color).add_modifier(Modifier::BOLD)),
                 Cell::from(dep.name.clone()),
                 Cell::from(dep.current_version.clone()).style(Style::default().fg(Color::DarkGray)),
                 Cell::from(dep.latest_version.clone()).style(Style::default().fg(Color::Green)),
+                Cell::from(vuln_label).style(vuln_count_style(vuln_count)),
             ])
         })
         .collect();
@@ -146,8 +196,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let table = Table::new(
         rows,
         [
-            Constraint::Percentage(25),
-            Constraint::Percentage(45),
+            Constraint::Percentage(20),
+            Constraint::Percentage(35),
+            Constraint::Percentage(15),
             Constraint::Percentage(15),
             Constraint::Percentage(15),
         ],
@@ -228,6 +279,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
             }
         }
 
+        let has_limited_audit = !dep.ecosystem.has_osv_coverage();
+        let mut has_active_vulns = false;
+
         if let Some(cached_res) = app.vuln_cache.get(&cache_key) {
             match cached_res {
                 Ok(vulns) => {
@@ -237,21 +291,30 @@ pub fn render(f: &mut Frame, app: &mut App) {
                         .collect();
 
                     if active_vulns.is_empty() {
-                        let is_limited =
-                            matches!(dep.ecosystem, Ecosystem::Pacman | Ecosystem::Mise);
-                        if is_limited {
+                        if has_limited_audit {
                             vuln_section.push_str(t("secure_limited"));
                         } else {
                             vuln_section.push_str(t("secure_msg"));
                         }
                     } else {
+                        has_active_vulns = true;
                         vuln_section
                             .push_str(&tf("vuln_warning", &[&active_vulns.len().to_string()]));
                         for vuln in active_vulns {
+                            let sev = severity_label(vuln.severity.as_deref());
+                            let score_str =
+                                vuln.score.map(|s| format!("{:.1}", s)).unwrap_or_default();
+                            let sev_tag = if !sev.is_empty() {
+                                format!(" [{}]", sev)
+                            } else if !score_str.is_empty() {
+                                format!(" [CVSS: {}]", score_str)
+                            } else {
+                                String::new()
+                            };
                             vuln_section.push_str(&tf(
                                 "vuln_item",
                                 &[
-                                    &vuln.id,
+                                    &format!("{}{}", vuln.id, sev_tag),
                                     &vuln.aliases.join(", "),
                                     &vuln.summary,
                                     &vuln.details,
@@ -264,24 +327,26 @@ pub fn render(f: &mut Frame, app: &mut App) {
                     vuln_section.push_str(&tf("audit_failed", &[err_msg]));
                 }
             }
+        } else if app.batch_scan_pending > 0 {
+            vuln_section.push_str(" ⏳ Scanning security...");
         } else {
             vuln_section.push_str(t("select_prompt"));
         }
 
-        let has_limited_audit = matches!(dep.ecosystem, Ecosystem::Pacman | Ecosystem::Mise);
+        let vuln_style = if has_active_vulns || has_limited_audit {
+            Style::default().fg(Color::Yellow)
+        } else if matches!(&app.status, AppStatus::UpgradeFailed(ref n, _) if n == &dep.name) {
+            Style::default().fg(Color::LightRed)
+        } else if !vuln_section.contains("⬚")
+            && (vuln_section.contains("✓") || vuln_section.contains("SECURE"))
+        {
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
 
-        let vuln_style =
-            if vuln_section.contains("ERRO DE UPGRADE") || vuln_section.contains("Falha") {
-                Style::default().fg(Color::LightRed)
-            } else if vuln_section.contains("AVISO") || has_limited_audit {
-                Style::default().fg(Color::Yellow)
-            } else if vuln_section.contains("SEGURO") {
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
         let vuln_widget = Paragraph::new(vuln_section)
             .style(vuln_style)
             .wrap(Wrap { trim: true });

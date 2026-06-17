@@ -33,7 +33,7 @@ pub enum Modal {
 
 pub enum AppEvent {
     ScanFinished(Tab, Vec<Dependency>),
-    SecurityChecked(Dependency, Result<Vec<VulnerabilityInfo>, String>),
+    SecurityChecked(Dependency, Result<Vec<VulnerabilityInfo>, String>, bool),
     UpgradeFinished(Result<(), String>),
 }
 
@@ -49,6 +49,7 @@ pub struct App {
     pub modal: Modal,
     pub vuln_cache: HashMap<String, Result<Vec<VulnerabilityInfo>, String>>,
     pub security_check_only: bool,
+    pub batch_scan_pending: usize,
 
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
     pub event_rx: mpsc::UnboundedReceiver<AppEvent>,
@@ -74,6 +75,7 @@ impl App {
             modal: Modal::None,
             vuln_cache: HashMap::new(),
             security_check_only: false,
+            batch_scan_pending: 0,
             event_tx,
             event_rx,
         }
@@ -134,18 +136,18 @@ impl App {
         self.status = AppStatus::Scanning;
         self.local_deps.clear();
         self.global_deps.clear();
+        self.vuln_cache.clear();
+        self.batch_scan_pending = 0;
         self.table_state.select(None);
 
         let tx = self.event_tx.clone();
         let dir = self.target_dir.clone();
 
-        // 1. Spawn local scan
         tokio::spawn(async move {
             let deps = check_all_outdated(&dir).await;
             let _ = tx.send(AppEvent::ScanFinished(Tab::Local, deps));
         });
 
-        // 2. Spawn global scan
         let tx_global = self.event_tx.clone();
         tokio::spawn(async move {
             let deps = check_global_outdated().await;
@@ -155,6 +157,41 @@ impl App {
 
     pub async fn load_config_sync(&mut self) {
         self.config = Config::load_from_dir(&self.target_dir).await;
+    }
+
+    fn trigger_batch_security_scan(&mut self) {
+        let all_deps: Vec<Dependency> = self
+            .local_deps
+            .iter()
+            .chain(self.global_deps.iter())
+            .cloned()
+            .collect();
+
+        let targets: Vec<(Dependency, u64)> = all_deps
+            .into_iter()
+            .filter(|d| d.ecosystem.has_osv_coverage())
+            .map(|d| (d, self.config.osv_timeout_secs()))
+            .collect();
+
+        self.batch_scan_pending = targets.len();
+        if self.batch_scan_pending == 0 {
+            return;
+        }
+
+        for (dep, timeout) in targets {
+            let tx = self.event_tx.clone();
+            tokio::spawn(async move {
+                let checker = SecurityChecker::new_with_config(timeout);
+                let result = checker
+                    .check_vulnerability(&dep.name, &dep.latest_version, dep.ecosystem)
+                    .await;
+                let _ = tx.send(AppEvent::SecurityChecked(
+                    dep,
+                    result.map_err(|e| e.to_string()),
+                    true,
+                ));
+            });
+        }
     }
 
     pub fn trigger_upgrade_selected(&mut self, force: bool) {
@@ -172,7 +209,6 @@ impl App {
             return;
         }
 
-        // Cache key for OSV check
         let cache_key = format!(
             "{}_{}_{}",
             dep.ecosystem.as_str(),
@@ -180,18 +216,15 @@ impl App {
             dep.latest_version
         );
 
-        // Check cache first
         if let Some(cached_result) = self.vuln_cache.get(&cache_key) {
             match cached_result {
                 Ok(vulns) => {
                     self.process_upgrade_with_vulns(dep, vulns.clone(), force);
                 }
                 Err(_) if force => {
-                    // Cache lookup returned error (e.g. offline), but user wants to force
                     self.start_upgrade(dep);
                 }
                 Err(err_msg) => {
-                    // Show warning that security checks failed
                     self.status = AppStatus::UpgradeFailed(
                         dep.name.clone(),
                         format!("Security check failed: {}", err_msg),
@@ -201,10 +234,9 @@ impl App {
             return;
         }
 
-        // Trigger security check
         self.status = AppStatus::Upgrading(format!("Auditing security for {}...", dep.name));
         let tx = self.event_tx.clone();
-        let checker = SecurityChecker::new();
+        let checker = SecurityChecker::new_with_config(self.config.osv_timeout_secs());
         let d = dep.clone();
 
         tokio::spawn(async move {
@@ -213,10 +245,10 @@ impl App {
                 .await
             {
                 Ok(vulns) => {
-                    let _ = tx.send(AppEvent::SecurityChecked(d, Ok(vulns)));
+                    let _ = tx.send(AppEvent::SecurityChecked(d, Ok(vulns), false));
                 }
                 Err(e) => {
-                    let _ = tx.send(AppEvent::SecurityChecked(d, Err(e.to_string())));
+                    let _ = tx.send(AppEvent::SecurityChecked(d, Err(e.to_string()), false));
                 }
             }
         });
@@ -229,6 +261,10 @@ impl App {
         };
 
         if self.status != AppStatus::Ready {
+            return;
+        }
+
+        if self.batch_scan_pending > 0 {
             return;
         }
 
@@ -250,7 +286,7 @@ impl App {
         self.security_check_only = true;
         self.status = AppStatus::Upgrading(format!("Auditing security for {}...", dep.name));
         let tx = self.event_tx.clone();
-        let checker = SecurityChecker::new();
+        let checker = SecurityChecker::new_with_config(self.config.osv_timeout_secs());
         let d = dep.clone();
 
         tokio::spawn(async move {
@@ -259,10 +295,10 @@ impl App {
                 .await
             {
                 Ok(vulns) => {
-                    let _ = tx.send(AppEvent::SecurityChecked(d, Ok(vulns)));
+                    let _ = tx.send(AppEvent::SecurityChecked(d, Ok(vulns), false));
                 }
                 Err(e) => {
-                    let _ = tx.send(AppEvent::SecurityChecked(d, Err(e.to_string())));
+                    let _ = tx.send(AppEvent::SecurityChecked(d, Err(e.to_string()), false));
                 }
             }
         });
@@ -272,6 +308,7 @@ impl App {
         &mut self,
         dep: Dependency,
         res: Result<Vec<VulnerabilityInfo>, String>,
+        from_pre_scan: bool,
     ) {
         let cache_key = format!(
             "{}_{}_{}",
@@ -280,6 +317,13 @@ impl App {
             dep.latest_version
         );
         self.vuln_cache.insert(cache_key, res.clone());
+
+        if from_pre_scan {
+            if self.batch_scan_pending > 0 {
+                self.batch_scan_pending -= 1;
+            }
+            return;
+        }
 
         if self.security_check_only {
             self.security_check_only = false;
@@ -292,14 +336,15 @@ impl App {
                 self.process_upgrade_with_vulns(dep, vulns, false);
             }
             Err(err_msg) => {
-                // If security check fails (offline/timeout), check policy
                 if self.config.block_vulnerable() {
                     self.status = AppStatus::UpgradeFailed(
                         dep.name.clone(),
-                        format!("Security check failed: {}. Upgrade BLOCKED by repository configuration.", err_msg)
+                        format!(
+                            "Security check failed: {}. Upgrade BLOCKED by repository configuration.",
+                            err_msg
+                        ),
                     );
                 } else {
-                    // Warning shown, allow forcing since config doesn't block it
                     self.modal = Modal::ConfirmForce(
                         dep,
                         vec![VulnerabilityInfo {
@@ -311,6 +356,8 @@ impl App {
                                 err_msg
                             ),
                             aliases: Vec::new(),
+                            severity: None,
+                            score: None,
                         }],
                     );
                     self.status = AppStatus::Ready;
@@ -325,28 +372,20 @@ impl App {
         vulns: Vec<VulnerabilityInfo>,
         force: bool,
     ) {
-        // Filter out ignored vulnerabilities based on config
         let active_vulns: Vec<VulnerabilityInfo> = vulns
             .into_iter()
             .filter(|v| !self.config.is_vulnerability_ignored(&v.id))
             .collect();
 
-        if active_vulns.is_empty() {
-            // Safe to upgrade
-            self.start_upgrade(dep);
-        } else if self.config.is_package_ignored(&dep.name) {
-            // Package is explicitly ignored in configuration, skip security checks
+        if active_vulns.is_empty() || self.config.is_package_ignored(&dep.name) {
             self.start_upgrade(dep);
         } else if self.config.block_vulnerable() {
-            // Blocked by repository rules
             self.modal = Modal::Blocked(dep, active_vulns);
             self.status = AppStatus::Ready;
         } else if force {
-            // User confirmed they want to force it
             self.modal = Modal::None;
             self.start_upgrade(dep);
         } else {
-            // Present warning modal and prompt to force
             self.modal = Modal::ConfirmForce(dep, active_vulns);
             self.status = AppStatus::Ready;
         }
@@ -368,7 +407,6 @@ impl App {
             let mut result = run_upgrade_process(&cmd, args, &target_dir, pipe_upgrade).await;
 
             if result.is_ok() && is_cargo_local {
-                // After cargo add, run cargo update to sync the lockfile
                 let update_args = vec!["update".to_string(), "-p".to_string(), dep_name.clone()];
                 let fetch_result =
                     run_upgrade_process("cargo", update_args, &target_dir, true).await;
@@ -399,41 +437,37 @@ impl App {
                     } else {
                         Some(0)
                     });
+                    self.trigger_batch_security_scan();
                 }
             }
-            AppEvent::SecurityChecked(dep, res) => {
-                self.process_security_result(dep, res);
+            AppEvent::SecurityChecked(dep, res, from_pre_scan) => {
+                self.process_security_result(dep, res, from_pre_scan);
             }
-            AppEvent::UpgradeFinished(res) => {
-                match res {
-                    Ok(_) => {
-                        let name = match self.status {
-                            AppStatus::Upgrading(ref msg) => {
-                                // Extract name from upgrading status message if possible
-                                msg.split_whitespace()
-                                    .nth(1)
-                                    .unwrap_or("dependency")
-                                    .to_string()
-                            }
-                            _ => "dependency".to_string(),
-                        };
-                        self.status = AppStatus::UpgradeSuccess(name);
-                        // Re-trigger scan to show updated dependency list
-                        self.trigger_scan();
-                    }
-                    Err(err_msg) => {
-                        let name = match self.status {
-                            AppStatus::Upgrading(ref msg) => msg
-                                .split_whitespace()
-                                .nth(1)
-                                .unwrap_or("dependency")
-                                .to_string(),
-                            _ => "dependency".to_string(),
-                        };
-                        self.status = AppStatus::UpgradeFailed(name, err_msg);
-                    }
+            AppEvent::UpgradeFinished(res) => match res {
+                Ok(_) => {
+                    let name = match self.status {
+                        AppStatus::Upgrading(ref msg) => msg
+                            .split_whitespace()
+                            .nth(1)
+                            .unwrap_or("dependency")
+                            .to_string(),
+                        _ => "dependency".to_string(),
+                    };
+                    self.status = AppStatus::UpgradeSuccess(name);
+                    self.trigger_scan();
                 }
-            }
+                Err(err_msg) => {
+                    let name = match self.status {
+                        AppStatus::Upgrading(ref msg) => msg
+                            .split_whitespace()
+                            .nth(1)
+                            .unwrap_or("dependency")
+                            .to_string(),
+                        _ => "dependency".to_string(),
+                    };
+                    self.status = AppStatus::UpgradeFailed(name, err_msg);
+                }
+            },
         }
     }
 }
@@ -442,7 +476,6 @@ pub(crate) fn strip_build_metadata(version: &str) -> &str {
     version.split('+').next().unwrap_or(version)
 }
 
-/// System-critical paths where running upgrades is not allowed.
 const BLOCKED_PATHS: &[&str] = &[
     "/etc",
     "/proc",
@@ -507,6 +540,10 @@ pub(crate) fn get_upgrade_cmd(dep: &Dependency, target_dir: &Path) -> (String, V
                     "install".to_string(),
                     format!("{}@{}", dep.name, clean_version),
                 ],
+            ),
+            Ecosystem::Homebrew => (
+                "brew".to_string(),
+                vec!["upgrade".to_string(), dep.name.clone()],
             ),
             _ => (
                 "echo".to_string(),
@@ -587,7 +624,7 @@ pub(crate) fn get_upgrade_cmd(dep: &Dependency, target_dir: &Path) -> (String, V
                     ],
                 )
             }
-            Ecosystem::Pacman | Ecosystem::Mise => (
+            Ecosystem::Pacman | Ecosystem::Mise | Ecosystem::Homebrew => (
                 "echo".to_string(),
                 vec!["Only supported as global packages".to_string()],
             ),

@@ -30,6 +30,7 @@ fn pt_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("col_package", "Pacote");
         m.insert("col_current", "Atual");
         m.insert("col_latest", "Mais Recente");
+        m.insert("col_vulns", "Vulns");
         m.insert("table_title_local", " Dependências Desatualizadas no Repositório ");
         m.insert("table_title_global", " Dependências Globais do Sistema ");
         m.insert("detail_title", " Auditoria de Segurança & Detalhes ");
@@ -91,6 +92,21 @@ fn pt_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("version_label", "Versão");
         m.insert("details_label", "Detalhes");
         m.insert("separator", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        // severity
+        m.insert("severity_critical", "CRÍTICO");
+        m.insert("severity_high", "ALTO");
+        m.insert("severity_medium", "MÉDIO");
+        m.insert("severity_low", "BAIXO");
+        m.insert("score_label", "CVSS: {0}");
+        // freshness
+        m.insert("freshness_warn", " ⚠️ Versão publicada há {0} dias — considerado recente. Verifique a procedência antes de atualizar.");
+        m.insert("freshness_ok", " ✓ Versão madura (publicada há mais de {0} dias).");
+        // provenance
+        m.insert("provenance_title", " 🛡 Proveniência");
+        m.insert("provenance_signed", " ✓ Assinado por {0}");
+        m.insert("provenance_unsigned", " ✗ Não verificado por assinatura");
+        m.insert("provenance_install_date", " 📅 Instalado em: {0}");
+        // fix suggestions
         m.insert("fix_build_tools", "🔧 Possível falta de toolchain de compilação.\n  • Ubuntu/Debian: sudo apt install build-essential\n  • Arch: sudo pacman -S base-devel");
         m.insert("fix_openssl", "🔧 Biblioteca OpenSSL ausente.\n  • Ubuntu/Debian: sudo apt install libssl-dev pkg-config\n  • Fedora: sudo dnf install openssl-devel\n  • Arch: sudo pacman -S openssl");
         m.insert("fix_permission", "🔧 Sem permissão. Tente executar o comando com sudo ou verifique permissões do diretório.");
@@ -115,6 +131,7 @@ fn en_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("col_package", "Package");
         m.insert("col_current", "Current");
         m.insert("col_latest", "Latest");
+        m.insert("col_vulns", "Vulns");
         m.insert("table_title_local", " Outdated Repository Dependencies ");
         m.insert("table_title_global", " Outdated Global Packages ");
         m.insert("detail_title", " Security Audit & Details ");
@@ -176,6 +193,21 @@ fn en_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("version_label", "Version");
         m.insert("details_label", "Details");
         m.insert("separator", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        // severity
+        m.insert("severity_critical", "CRITICAL");
+        m.insert("severity_high", "HIGH");
+        m.insert("severity_medium", "MEDIUM");
+        m.insert("severity_low", "LOW");
+        m.insert("score_label", "CVSS: {0}");
+        // freshness
+        m.insert("freshness_warn", " ⚠️ Version published {0} days ago — considered recent. Verify provenance before upgrading.");
+        m.insert("freshness_ok", " ✓ Version is mature (published more than {0} days ago).");
+        // provenance
+        m.insert("provenance_title", " 🛡 Provenance");
+        m.insert("provenance_signed", " ✓ Signed by {0}");
+        m.insert("provenance_unsigned", " ✗ Not signature-verified");
+        m.insert("provenance_install_date", " 📅 Installed on: {0}");
+        // fix suggestions
         m.insert("fix_build_tools", "🔧 Possible missing build toolchain.\n  • Ubuntu/Debian: sudo apt install build-essential\n  • Arch: sudo pacman -S base-devel\n  • Fedora: sudo dnf groupinstall 'Development Tools'");
         m.insert("fix_openssl", "🔧 Missing OpenSSL library.\n  • Ubuntu/Debian: sudo apt install libssl-dev pkg-config\n  • Fedora: sudo dnf install openssl-devel\n  • Arch: sudo pacman -S openssl");
         m.insert("fix_permission", "🔧 Permission denied. Try running the command with sudo or check directory permissions.");

@@ -215,12 +215,27 @@ fn ecosystem_color(ecosystem: Ecosystem) -> Color {
         Ecosystem::Python => Color::Cyan,
         Ecosystem::Pacman => Color::Cyan,
         Ecosystem::Mise => Color::LightBlue,
+        Ecosystem::Homebrew => Color::White,
     }
 }
 
-/// Process a SecurityChecked event: update the item's outcome,
-/// start the upgrade if safe/forced, or skip/block if vulnerable.
-/// Returns true if all items are done (cursor >= len).
+fn vuln_count_label(count: usize) -> String {
+    match count {
+        0 => "✓".to_string(),
+        n => n.to_string(),
+    }
+}
+
+fn vuln_count_style(count: usize) -> Style {
+    match count {
+        0 => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        1..=2 => Style::default().fg(Color::Yellow),
+        _ => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    }
+}
+
 fn process_security_checked(
     screen: &mut BatchScreen,
     index: usize,
@@ -303,8 +318,6 @@ fn process_security_checked(
     }
 }
 
-/// Process an UpgradeFinished event: update the item's outcome.
-/// Returns true if all items are done (cursor >= len).
 fn process_upgrade_finished(
     screen: &mut BatchScreen,
     index: usize,
@@ -540,10 +553,16 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
 
             let mut list_lines: Vec<Line> = Vec::new();
 
-            let header_line = Line::from(vec![Span::raw(tf(
-                "batch_header",
-                &[&total_items.to_string()],
-            ))])
+            let header_line = Line::from(vec![
+                Span::raw(tf("batch_header", &[&total_items.to_string()])),
+                Span::raw("    "),
+                Span::styled(
+                    t("col_vulns"),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])
             .style(
                 Style::default()
                     .fg(Color::Cyan)
@@ -577,6 +596,9 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
 
                 let prefix = if is_selected { " ➜" } else { "  " };
 
+                let vuln_count = item.vulns.as_ref().map_or(0, |v| v.len());
+                let vuln_label = vuln_count_label(vuln_count);
+
                 let item_line = Line::from(vec![
                     Span::styled(prefix, Style::default().fg(Color::Cyan)),
                     Span::styled(format!(" [{}] ", selection_mark), selection_style),
@@ -585,7 +607,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                         Style::default().fg(eco_color).add_modifier(Modifier::BOLD),
                     ),
                     Span::raw("  "),
-                    Span::raw(format!("{:30}", item.dependency.name)),
+                    Span::raw(format!("{:26}", item.dependency.name)),
                     Span::raw("  "),
                     Span::styled(
                         format!("{:10}", item.dependency.current_version),
@@ -596,6 +618,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                         format!("{:10}", item.dependency.latest_version),
                         Style::default().fg(Color::Green),
                     ),
+                    Span::styled(format!(" {:>4}", vuln_label), vuln_count_style(vuln_count)),
                 ]);
 
                 let styled_line = if is_selected {
@@ -690,6 +713,9 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                     ItemOutcome::SkippedVulnerable(_vulns) => t("exec_skipped").to_string(),
                 };
 
+                let vuln_count = item.vulns.as_ref().map_or(0, |v| v.len());
+                let vuln_label = vuln_count_label(vuln_count);
+
                 let execution_line = Line::from(vec![
                     Span::styled(
                         format!("{:4} ", status_symbol),
@@ -701,7 +727,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                             .fg(ecosystem_color(item.dependency.ecosystem))
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(format!("{:30}  ", item.dependency.name)),
+                    Span::raw(format!("{:26}  ", item.dependency.name)),
                     Span::styled(
                         format!("{:10}", item.dependency.current_version),
                         Style::default().fg(Color::DarkGray),
@@ -711,6 +737,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                         format!("{:10}", item.dependency.latest_version),
                         Style::default().fg(Color::Green),
                     ),
+                    Span::styled(format!(" {:>4}", vuln_label), vuln_count_style(vuln_count)),
                     Span::raw("  "),
                     Span::styled(outcome_text, Style::default().fg(status_color)),
                 ]);
@@ -771,6 +798,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                         .add_modifier(Modifier::BOLD),
                 )));
                 for item in &upgraded_items {
+                    let vuln_count = item.vulns.as_ref().map_or(0, |list| list.len());
                     report_lines.push(Line::from(vec![
                         Span::raw("     "),
                         Span::styled(
@@ -779,7 +807,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                                 .fg(ecosystem_color(item.dependency.ecosystem))
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(format!("  {:30}", item.dependency.name)),
+                        Span::raw(format!("  {:26}", item.dependency.name)),
                         Span::styled(
                             format!(" {:10}", item.dependency.current_version),
                             Style::default().fg(Color::DarkGray),
@@ -789,6 +817,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                             format!("{:10}", item.dependency.latest_version),
                             Style::default().fg(Color::Green),
                         ),
+                        Span::raw(format!("  {}", vuln_count_label(vuln_count))),
                     ]));
                 }
                 report_lines.push(Line::from(""));
@@ -811,7 +840,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                                 .fg(ecosystem_color(item.dependency.ecosystem))
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(format!("  {:30}", item.dependency.name)),
+                        Span::raw(format!("  {:26}", item.dependency.name)),
                         Span::styled(
                             format!(" {:10}", item.dependency.current_version),
                             Style::default().fg(Color::DarkGray),
@@ -821,7 +850,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                             format!("{:10}", item.dependency.latest_version),
                             Style::default().fg(Color::Green),
                         ),
-                        Span::raw(format!(" ({} vuln)", vuln_count)),
+                        Span::raw(format!("  {} vulns", vuln_count)),
                     ]));
                 }
                 report_lines.push(Line::from(""));
@@ -845,7 +874,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                                 .fg(ecosystem_color(item.dependency.ecosystem))
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(format!("  {:30}", item.dependency.name)),
+                        Span::raw(format!("  {:26}", item.dependency.name)),
                         Span::raw(format!("  {}", error_message)),
                     ]));
                 }
@@ -858,7 +887,6 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 )));
                 for item in &blocked_items {
-                    let vuln_count = item.vulns.as_ref().map_or(0, |list| list.len());
                     report_lines.push(Line::from(vec![
                         Span::raw("     "),
                         Span::styled(
@@ -867,7 +895,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                                 .fg(ecosystem_color(item.dependency.ecosystem))
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(format!("  {:30}", item.dependency.name)),
+                        Span::raw(format!("  {:26}", item.dependency.name)),
                         Span::styled(
                             format!(" {:10}", item.dependency.current_version),
                             Style::default().fg(Color::DarkGray),
@@ -877,7 +905,6 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                             format!("{:10}", item.dependency.latest_version),
                             Style::default().fg(Color::Green),
                         ),
-                        Span::raw(format!(" ({} vulns)", vuln_count)),
                     ]));
                 }
                 report_lines.push(Line::from(""));
@@ -903,7 +930,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                                 .fg(ecosystem_color(item.dependency.ecosystem))
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw(format!("  {:30}", item.dependency.name)),
+                        Span::raw(format!("  {:26}", item.dependency.name)),
                         Span::styled(
                             format!(" {:10}", item.dependency.current_version),
                             Style::default().fg(Color::DarkGray),
@@ -913,17 +940,12 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                             format!("{:10}", item.dependency.latest_version),
                             Style::default().fg(Color::Green),
                         ),
-                        Span::raw(format!(" ({} vulns)", vuln_count)),
+                        Span::raw(format!("  {} vulns", vuln_count)),
                     ]));
                 }
                 report_lines.push(Line::from(""));
             }
 
-            let _total_selected = upgraded_items.len()
-                + force_upgraded_items.len()
-                + failed_items.len()
-                + blocked_items.len()
-                + skipped_items.len();
             let total_succeeded = upgraded_items.len() + force_upgraded_items.len();
 
             report_lines.push(Line::from(Span::styled(

@@ -10,6 +10,12 @@ pub struct SecurityConfig {
     pub ignored_packages: Option<HashSet<String>>,
     #[serde(default)]
     pub ignored_vulnerabilities: Option<HashSet<String>>,
+    #[serde(default)]
+    pub osv_timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub pre_scan_security: Option<bool>,
+    #[serde(default)]
+    pub freshness_threshold_days: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -56,6 +62,18 @@ impl Config {
             false
         }
     }
+
+    pub fn osv_timeout_secs(&self) -> u64 {
+        self.security.osv_timeout_secs.unwrap_or(5)
+    }
+
+    pub fn pre_scan_security(&self) -> bool {
+        self.security.pre_scan_security.unwrap_or(true)
+    }
+
+    pub fn freshness_threshold_days(&self) -> i64 {
+        self.security.freshness_threshold_days.unwrap_or(7)
+    }
 }
 
 #[cfg(test)]
@@ -68,6 +86,9 @@ mod tests {
         assert!(!config.block_vulnerable());
         assert!(!config.is_package_ignored("any-pkg"));
         assert!(!config.is_vulnerability_ignored("GHSA-1234"));
+        assert_eq!(config.osv_timeout_secs(), 5);
+        assert!(config.pre_scan_security());
+        assert_eq!(config.freshness_threshold_days(), 7);
     }
 
     #[test]
@@ -77,6 +98,9 @@ mod tests {
             block_vulnerable = true
             ignored_packages = ["lodash", "serde"]
             ignored_vulnerabilities = ["GHSA-xxxx-yyyy"]
+            osv_timeout_secs = 10
+            pre_scan_security = false
+            freshness_threshold_days = 14
         "#;
         let config: Config = toml::from_str(content).unwrap();
         assert!(config.block_vulnerable());
@@ -85,5 +109,8 @@ mod tests {
         assert!(!config.is_package_ignored("anyhow"));
         assert!(config.is_vulnerability_ignored("GHSA-xxxx-yyyy"));
         assert!(!config.is_vulnerability_ignored("GHSA-other"));
+        assert_eq!(config.osv_timeout_secs(), 10);
+        assert!(!config.pre_scan_security());
+        assert_eq!(config.freshness_threshold_days(), 14);
     }
 }

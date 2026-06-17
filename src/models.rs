@@ -12,6 +12,7 @@ pub enum Ecosystem {
     Python,
     Pacman,
     Mise,
+    Homebrew,
 }
 
 impl Ecosystem {
@@ -27,6 +28,7 @@ impl Ecosystem {
             Ecosystem::Python => "Python",
             Ecosystem::Pacman => "Pacman",
             Ecosystem::Mise => "mise",
+            Ecosystem::Homebrew => "Homebrew",
         }
     }
 
@@ -42,7 +44,23 @@ impl Ecosystem {
             Ecosystem::Python => "PyPI",
             Ecosystem::Pacman => "Arch Linux",
             Ecosystem::Mise => "GitHub Actions",
+            Ecosystem::Homebrew => "Homebrew",
         }
+    }
+
+    pub fn has_osv_coverage(&self) -> bool {
+        matches!(
+            self,
+            Ecosystem::Cargo
+                | Ecosystem::Go
+                | Ecosystem::Dart
+                | Ecosystem::Elixir
+                | Ecosystem::Npm
+                | Ecosystem::Php
+                | Ecosystem::Ruby
+                | Ecosystem::Python
+                | Ecosystem::Homebrew
+        )
     }
 }
 
@@ -61,4 +79,14 @@ pub struct VulnerabilityInfo {
     pub summary: String,
     pub details: String,
     pub aliases: Vec<String>,
+    pub severity: Option<String>,
+    pub score: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvenanceInfo {
+    pub validated_by: Option<String>,
+    pub install_date: Option<String>,
+    pub pkgbuild_age_days: Option<i64>,
+    pub signature_verified: bool,
 }

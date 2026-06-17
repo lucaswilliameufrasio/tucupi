@@ -3,6 +3,7 @@ pub mod dart;
 pub mod elixir;
 pub mod global;
 pub mod go;
+pub mod homebrew;
 pub mod js_ts;
 pub mod mise;
 pub mod pacman;
@@ -108,8 +109,9 @@ pub async fn check_global_outdated() -> Vec<Dependency> {
     let global = global::GlobalAdapter::try_new();
     let pacman = pacman::PacmanAdapter::try_new();
     let mise = mise::MiseAdapter::try_new();
+    let homebrew = homebrew::HomebrewAdapter::try_new();
 
-    let (global_res, pacman_res, mise_res) = tokio::join!(
+    let (global_res, pacman_res, mise_res, homebrew_res) = tokio::join!(
         async {
             match global {
                 Ok(ref adapter) => adapter.check_outdated().await.unwrap_or_default(),
@@ -133,6 +135,15 @@ pub async fn check_global_outdated() -> Vec<Dependency> {
                     .unwrap_or_default(),
                 Err(_) => Vec::new(),
             }
+        },
+        async {
+            match homebrew {
+                Ok(ref adapter) => adapter
+                    .check_outdated(&std::path::PathBuf::from("/"))
+                    .await
+                    .unwrap_or_default(),
+                Err(_) => Vec::new(),
+            }
         }
     );
 
@@ -140,5 +151,6 @@ pub async fn check_global_outdated() -> Vec<Dependency> {
     all_deps.extend(global_res);
     all_deps.extend(pacman_res);
     all_deps.extend(mise_res);
+    all_deps.extend(homebrew_res);
     all_deps
 }
