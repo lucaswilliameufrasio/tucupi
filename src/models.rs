@@ -99,6 +99,7 @@ pub struct VulnerabilityInfo {
     pub aliases: Vec<String>,
     pub severity: Option<String>,
     pub score: Option<f64>,
+    pub sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

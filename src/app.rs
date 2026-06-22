@@ -462,6 +462,7 @@ impl App {
                             aliases: Vec::new(),
                             severity: None,
                             score: None,
+                            sources: vec!["policy".to_string()],
                         }],
                     );
                     self.status = AppStatus::Ready;

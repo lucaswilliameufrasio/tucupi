@@ -85,10 +85,13 @@ impl SecurityChecker {
         let mut all_vulns = osv_result.unwrap_or_default();
         if let Ok(nvd_vulns) = nvd_result {
             for nvd_vuln in nvd_vulns {
-                if !all_vulns
-                    .iter()
-                    .any(|v| v.id == nvd_vuln.id || v.aliases.contains(&nvd_vuln.id))
-                {
+                if let Some(existing) = all_vulns.iter_mut().find(|v| {
+                    v.id == nvd_vuln.id
+                        || v.aliases.contains(&nvd_vuln.id)
+                        || nvd_vuln.aliases.contains(&v.id)
+                }) {
+                    merge_vulnerability(existing, nvd_vuln);
+                } else {
                     all_vulns.push(nvd_vuln);
                 }
             }
@@ -203,10 +206,11 @@ impl SecurityChecker {
             Err(_) => return Ok(Vec::new()),
         };
 
+        let lowered_name = name.to_lowercase();
         let vulns = nvd_res
             .vulnerabilities
             .into_iter()
-            .map(|item| {
+            .filter_map(|item| {
                 let summary = item
                     .cve
                     .descriptions
@@ -214,15 +218,19 @@ impl SecurityChecker {
                     .find(|d| d.lang == "en")
                     .map(|d| d.value.clone())
                     .unwrap_or_default();
+                if !summary.to_lowercase().contains(&lowered_name) {
+                    return None;
+                }
                 let truncated: String = summary.chars().take(200).collect();
-                VulnerabilityInfo {
+                Some(VulnerabilityInfo {
                     id: item.cve.id,
                     summary: truncated.clone(),
                     details: summary,
                     aliases: Vec::new(),
                     severity: None,
                     score: None,
-                }
+                    sources: vec!["NVD".to_string()],
+                })
             })
             .collect();
 
@@ -342,6 +350,47 @@ fn parse_osv_vuln(v: OsvVulnerability) -> VulnerabilityInfo {
         aliases: v.aliases,
         severity,
         score,
+        sources: vec!["OSV".to_string()],
+    }
+}
+
+fn merge_vulnerability(existing: &mut VulnerabilityInfo, incoming: VulnerabilityInfo) {
+    let VulnerabilityInfo {
+        summary,
+        details,
+        aliases,
+        severity,
+        score,
+        sources,
+        ..
+    } = incoming;
+
+    for source in sources {
+        if !existing.sources.contains(&source) {
+            existing.sources.push(source);
+        }
+    }
+
+    for alias in aliases {
+        if !existing.aliases.contains(&alias) {
+            existing.aliases.push(alias);
+        }
+    }
+
+    if existing.summary.is_empty() && !summary.is_empty() {
+        existing.summary = summary;
+    }
+
+    if existing.details.is_empty() && !details.is_empty() {
+        existing.details = details;
+    }
+
+    if existing.severity.is_none() {
+        existing.severity = severity;
+    }
+
+    if existing.score.is_none() {
+        existing.score = score;
     }
 }
 

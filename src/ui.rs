@@ -355,10 +355,15 @@ pub fn render(f: &mut Frame, app: &mut App) {
                             } else {
                                 String::new()
                             };
+                            let sources_tag = if vuln.sources.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" [src: {}]", vuln.sources.join(","))
+                            };
                             vuln_section.push_str(&tf(
                                 "vuln_item",
                                 &[
-                                    &format!("{}{}", vuln.id, sev_tag),
+                                    &format!("{}{}{}", vuln.id, sev_tag, sources_tag),
                                     &vuln.aliases.join(", "),
                                     &vuln.summary,
                                     &vuln.details,
