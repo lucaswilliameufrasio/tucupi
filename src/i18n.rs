@@ -70,6 +70,7 @@ fn pt_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("modal_global_msg", "Você está prestes a atualizar um pacote global ou do sistema.\n\nComando:\n{0}\n\nPressione [Enter] para confirmar ou [Esc] para cancelar.");
         m.insert("blocked_online_required", "A auditoria de segurança online falhou: {0}. A política local exige validação online antes de atualizar.");
         m.insert("blocked_aur_disabled", "Pacotes AUR estão desabilitados por política local. Habilite `security.aur_enabled = true` para permitir upgrades AUR.");
+        m.insert("blocked_provenance_required", "A procedência do pacote não pôde ser verificada de forma confiável. A política local exige proveniência válida antes de atualizar.");
         m.insert("origin_official", "Repositório Oficial");
         m.insert("origin_aur", "AUR");
         m.insert("origin_unknown", "Desconhecida");
@@ -183,6 +184,7 @@ fn en_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("modal_global_msg", "You are about to upgrade a global or system package.\n\nCommand:\n{0}\n\nPress [Enter] to confirm or [Esc] to cancel.");
         m.insert("blocked_online_required", "Online security auditing failed: {0}. Local policy requires online validation before upgrading.");
         m.insert("blocked_aur_disabled", "AUR packages are disabled by local policy. Set `security.aur_enabled = true` to allow AUR upgrades.");
+        m.insert("blocked_provenance_required", "Package provenance could not be verified reliably. Local policy requires valid provenance before upgrading.");
         m.insert("origin_official", "Official Repo");
         m.insert("origin_aur", "AUR");
         m.insert("origin_unknown", "Unknown");

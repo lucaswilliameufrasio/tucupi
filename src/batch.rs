@@ -2,8 +2,8 @@ use crate::adapters::{check_all_outdated, check_global_outdated};
 use crate::app::{get_upgrade_cmd, run_upgrade_process};
 use crate::config::Config;
 use crate::i18n::{t, tf};
-use crate::models::{Dependency, Ecosystem, PackageOrigin, VulnerabilityInfo};
-use crate::security::SecurityChecker;
+use crate::models::{Dependency, Ecosystem, PackageOrigin, ProvenanceInfo, VulnerabilityInfo};
+use crate::security::{check_provenance, SecurityChecker};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -71,7 +71,11 @@ enum BatchScreen {
 
 enum BatchEvent {
     ScanFinished(Vec<Dependency>),
-    SecurityChecked(usize, Result<Vec<VulnerabilityInfo>, String>),
+    SecurityChecked(
+        usize,
+        Result<Vec<VulnerabilityInfo>, String>,
+        Option<ProvenanceInfo>,
+    ),
     UpgradeFinished(usize, Result<(), String>),
 }
 
@@ -132,11 +136,12 @@ pub async fn run(
                         force_mode: false,
                     };
                 }
-                BatchEvent::SecurityChecked(index, result) => {
+                BatchEvent::SecurityChecked(index, result, provenance_info) => {
                     let is_done = process_security_checked(
                         &mut screen,
                         index,
                         result,
+                        provenance_info,
                         &config,
                         &target_dir,
                         &event_tx,
@@ -203,12 +208,20 @@ fn kick_off_security_checks(
         let ecosystem = item.dependency.ecosystem;
         let tx = event_tx.clone();
         tokio::spawn(async move {
-            let result = checker
-                .check_vulnerability(&dependency_name, &dependency_latest, ecosystem)
-                .await;
+            let (result, provenance_info) = tokio::join!(
+                checker.check_vulnerability(&dependency_name, &dependency_latest, ecosystem),
+                async {
+                    if ecosystem == Ecosystem::Pacman {
+                        Some(check_provenance(&dependency_name, ecosystem).await)
+                    } else {
+                        None
+                    }
+                }
+            );
             let _ = tx.send(BatchEvent::SecurityChecked(
                 index,
                 result.map_err(|error| error.to_string()),
+                provenance_info,
             ));
         });
     }
@@ -251,6 +264,7 @@ fn process_security_checked(
     screen: &mut BatchScreen,
     index: usize,
     result: Result<Vec<VulnerabilityInfo>, String>,
+    provenance_info: Option<ProvenanceInfo>,
     config: &Config,
     target_dir: &Path,
     event_tx: &mpsc::UnboundedSender<BatchEvent>,
@@ -278,6 +292,18 @@ fn process_security_checked(
             dependency.name
         );
         item.outcome = ItemOutcome::Blocked(t("blocked_aur_disabled").to_string());
+        *current_cursor = current_cursor.saturating_add(1);
+        return *current_cursor >= items.len();
+    }
+
+    if dependency.ecosystem == Ecosystem::Pacman
+        && config.require_provenance()
+        && !provenance_info
+            .as_ref()
+            .is_some_and(|info| info.signature_verified)
+    {
+        *progress_message = format!("[BLOCKED] {} — proveniência obrigatória", dependency.name);
+        item.outcome = ItemOutcome::Blocked(t("blocked_provenance_required").to_string());
         *current_cursor = current_cursor.saturating_add(1);
         return *current_cursor >= items.len();
     }

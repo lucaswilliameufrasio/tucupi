@@ -179,6 +179,14 @@ impl App {
         if matches!(dep.origin, Some(PackageOrigin::Aur)) && !self.config.aur_enabled() {
             return Some(t("blocked_aur_disabled").to_string());
         }
+
+        if dep.ecosystem == Ecosystem::Pacman && self.config.require_provenance() {
+            return match self.provenance_cache.get(&cache_key(dep)) {
+                Some(info) if info.signature_verified => None,
+                _ => Some(t("blocked_provenance_required").to_string()),
+            };
+        }
+
         None
     }
 
@@ -847,4 +855,13 @@ pub(crate) async fn run_upgrade_process(
         }
         Err(e) => Err(format!("Failed to start process: {}", e)),
     }
+}
+
+fn cache_key(dep: &Dependency) -> String {
+    format!(
+        "{}_{}_{}",
+        dep.ecosystem.as_str(),
+        dep.name,
+        dep.latest_version
+    )
 }
