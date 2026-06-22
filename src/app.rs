@@ -1,7 +1,7 @@
 use crate::adapters::{check_all_outdated, check_global_outdated};
 use crate::config::Config;
-use crate::i18n::t;
-use crate::models::{Dependency, Ecosystem, ProvenanceInfo, VulnerabilityInfo};
+use crate::i18n::{t, tf};
+use crate::models::{Dependency, Ecosystem, PackageOrigin, ProvenanceInfo, VulnerabilityInfo};
 use crate::security::{check_provenance, SecurityChecker};
 use ratatui::widgets::TableState;
 use std::collections::HashMap;
@@ -28,7 +28,9 @@ pub enum AppStatus {
 pub enum Modal {
     None,
     Blocked(Dependency, Vec<VulnerabilityInfo>),
+    BlockedPolicy(Dependency, String),
     ConfirmForce(Dependency, Vec<VulnerabilityInfo>),
+    ConfirmGlobal(Dependency, String),
 }
 
 pub enum AppEvent {
@@ -167,6 +169,26 @@ impl App {
         self.config = Config::load_from_dir(&self.target_dir).await;
     }
 
+    fn block_with_policy_message(&mut self, dep: Dependency, message: String) {
+        let package_name = dep.name.clone();
+        self.modal = Modal::BlockedPolicy(dep, message.clone());
+        self.status = AppStatus::UpgradeFailed(package_name, message);
+    }
+
+    fn policy_block_reason(&self, dep: &Dependency) -> Option<String> {
+        if matches!(dep.origin, Some(PackageOrigin::Aur)) && !self.config.aur_enabled() {
+            return Some(t("blocked_aur_disabled").to_string());
+        }
+        None
+    }
+
+    pub fn confirm_global_upgrade(&mut self) {
+        if let Modal::ConfirmGlobal(dep, _) = self.modal.clone() {
+            self.modal = Modal::None;
+            self.start_upgrade_confirmed(dep);
+        }
+    }
+
     fn trigger_batch_security_scan(&mut self) {
         let all_deps: Vec<Dependency> = self
             .local_deps
@@ -240,6 +262,11 @@ impl App {
             None => return,
         };
 
+        if let Some(message) = self.policy_block_reason(&dep) {
+            self.block_with_policy_message(dep, message);
+            return;
+        }
+
         if self.status != AppStatus::Ready && !matches!(self.status, AppStatus::UpgradeFailed(_, _))
         {
             return;
@@ -260,6 +287,9 @@ impl App {
             match cached_result {
                 Ok(vulns) => {
                     self.process_upgrade_with_vulns(dep, vulns.clone(), force);
+                }
+                Err(err_msg) if self.config.require_online() => {
+                    self.block_with_policy_message(dep, tf("blocked_online_required", &[err_msg]));
                 }
                 Err(_) if force => {
                     self.start_upgrade(dep);
@@ -382,7 +412,9 @@ impl App {
                 self.process_upgrade_with_vulns(dep, vulns, false);
             }
             Err(err_msg) => {
-                if self.config.block_vulnerable() {
+                if self.config.require_online() {
+                    self.block_with_policy_message(dep, tf("blocked_online_required", &[&err_msg]));
+                } else if self.config.block_vulnerable() {
                     self.status = AppStatus::UpgradeFailed(
                         dep.name.clone(),
                         format!(
@@ -418,6 +450,11 @@ impl App {
         vulns: Vec<VulnerabilityInfo>,
         force: bool,
     ) {
+        if let Some(message) = self.policy_block_reason(&dep) {
+            self.block_with_policy_message(dep, message);
+            return;
+        }
+
         let active_vulns: Vec<VulnerabilityInfo> = vulns
             .into_iter()
             .filter(|v| !self.config.is_vulnerability_ignored(&v.id))
@@ -438,6 +475,18 @@ impl App {
     }
 
     fn start_upgrade(&mut self, dep: Dependency) {
+        if dep.is_global && self.config.confirm_global() {
+            let (command, args) = get_upgrade_cmd(&dep, &self.target_dir);
+            let command_line = format!("{} {}", command, args.join(" "));
+            self.modal = Modal::ConfirmGlobal(dep, command_line);
+            self.status = AppStatus::Ready;
+            return;
+        }
+
+        self.start_upgrade_confirmed(dep);
+    }
+
+    fn start_upgrade_confirmed(&mut self, dep: Dependency) {
         let is_cargo_local = !dep.is_global && dep.ecosystem == Ecosystem::Cargo;
         let pipe_upgrade = !dep.is_global;
         self.status = AppStatus::Upgrading(format!(

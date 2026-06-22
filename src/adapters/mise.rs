@@ -54,6 +54,7 @@ impl MiseAdapter {
                         latest_version,
                         ecosystem: Ecosystem::Mise,
                         is_global: true,
+                        origin: None,
                     });
                 }
             }

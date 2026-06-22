@@ -61,6 +61,7 @@ impl RubyAdapter {
                             latest_version,
                             ecosystem: Ecosystem::Ruby,
                             is_global: false,
+                            origin: None,
                         });
                     }
                 }

@@ -2,7 +2,7 @@ use crate::adapters::{check_all_outdated, check_global_outdated};
 use crate::app::{get_upgrade_cmd, run_upgrade_process};
 use crate::config::Config;
 use crate::i18n::{t, tf};
-use crate::models::{Dependency, Ecosystem, VulnerabilityInfo};
+use crate::models::{Dependency, Ecosystem, PackageOrigin, VulnerabilityInfo};
 use crate::security::SecurityChecker;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -35,7 +35,7 @@ enum ItemOutcome {
     Upgraded,
     ForceUpgraded,
     Failed(String),
-    Blocked(Vec<VulnerabilityInfo>),
+    Blocked(String),
     SkippedVulnerable(Vec<VulnerabilityInfo>),
 }
 
@@ -50,6 +50,11 @@ struct BatchItem {
 enum BatchScreen {
     Scanning,
     Select {
+        items: Vec<BatchItem>,
+        cursor: usize,
+        force_mode: bool,
+    },
+    ConfirmGlobal {
         items: Vec<BatchItem>,
         cursor: usize,
         force_mode: bool,
@@ -166,6 +171,7 @@ pub async fn run(
                         previous_screen,
                         key_code,
                         &event_tx,
+                        &config,
                         &target_dir,
                         include_global,
                         &mut running,
@@ -181,12 +187,17 @@ pub async fn run(
     Ok(())
 }
 
-fn kick_off_security_checks(items: &[BatchItem], event_tx: &mpsc::UnboundedSender<BatchEvent>) {
+fn kick_off_security_checks(
+    items: &[BatchItem],
+    event_tx: &mpsc::UnboundedSender<BatchEvent>,
+    config: &Config,
+) {
     for (index, item) in items.iter().enumerate() {
         if item.selection == SelectionState::None {
             continue;
         }
-        let checker = SecurityChecker::new();
+        let checker =
+            SecurityChecker::new_with_config(config.osv_timeout_secs(), config.nvd_api_key());
         let dependency_name = item.dependency.name.clone();
         let dependency_latest = item.dependency.latest_version.clone();
         let ecosystem = item.dependency.ecosystem;
@@ -261,7 +272,38 @@ fn process_security_checked(
     let item = &mut items[index];
     let dependency = &item.dependency;
 
-    item.vulns = result.ok();
+    if matches!(dependency.origin, Some(PackageOrigin::Aur)) && !config.aur_enabled() {
+        *progress_message = format!(
+            "[BLOCKED] {} — AUR desabilitado por política",
+            dependency.name
+        );
+        item.outcome = ItemOutcome::Blocked(t("blocked_aur_disabled").to_string());
+        *current_cursor = current_cursor.saturating_add(1);
+        return *current_cursor >= items.len();
+    }
+
+    let result = match result {
+        Ok(vulns) => {
+            item.vulns = Some(vulns);
+            Ok(())
+        }
+        Err(error_message) => {
+            item.vulns = None;
+            if config.require_online() {
+                *progress_message = format!(
+                    "[BLOCKED] {} — auditoria online obrigatória",
+                    dependency.name
+                );
+                item.outcome =
+                    ItemOutcome::Blocked(tf("blocked_online_required", &[&error_message]));
+                *current_cursor = current_cursor.saturating_add(1);
+                return *current_cursor >= items.len();
+            }
+            Err(error_message)
+        }
+    };
+
+    let _ = result;
 
     let (filtered_vulns, has_blocked_vulns) = match &item.vulns {
         Some(vulns_list) => {
@@ -304,7 +346,10 @@ fn process_security_checked(
                     "[BLOCKED] {} — bloqueado por política de segurança",
                     dependency.name
                 );
-                ItemOutcome::Blocked(filtered_vulns)
+                ItemOutcome::Blocked(format!(
+                    "{} vulnerabilidade(s) ativa(s)",
+                    filtered_vulns.len()
+                ))
             } else {
                 *progress_message = format!(
                     "[SKIPPED] {} — vulnerável, sem força habilitada",
@@ -380,6 +425,7 @@ fn handle_key_input(
     previous_screen: BatchScreen,
     key_code: KeyCode,
     event_tx: &mpsc::UnboundedSender<BatchEvent>,
+    config: &Config,
     target_dir: &Path,
     include_global: bool,
     running: &mut bool,
@@ -444,11 +490,22 @@ fn handle_key_input(
                     .iter()
                     .any(|item| item.selection != SelectionState::None);
                 if has_selected {
-                    kick_off_security_checks(&items, event_tx);
-                    BatchScreen::Executing {
-                        items,
-                        current_cursor: 0,
-                        progress_message: String::new(),
+                    let has_global = items.iter().any(|item| {
+                        item.selection != SelectionState::None && item.dependency.is_global
+                    });
+                    if has_global && config.confirm_global() {
+                        BatchScreen::ConfirmGlobal {
+                            items,
+                            cursor,
+                            force_mode,
+                        }
+                    } else {
+                        kick_off_security_checks(&items, event_tx, config);
+                        BatchScreen::Executing {
+                            items,
+                            current_cursor: 0,
+                            progress_message: String::new(),
+                        }
                     }
                 } else {
                     BatchScreen::Select {
@@ -459,6 +516,38 @@ fn handle_key_input(
                 }
             }
             _ => BatchScreen::Select {
+                items,
+                cursor,
+                force_mode,
+            },
+        },
+        BatchScreen::ConfirmGlobal {
+            items,
+            cursor,
+            force_mode,
+        } => match key_code {
+            KeyCode::Esc => BatchScreen::Select {
+                items,
+                cursor,
+                force_mode,
+            },
+            KeyCode::Enter => {
+                kick_off_security_checks(&items, event_tx, config);
+                BatchScreen::Executing {
+                    items,
+                    current_cursor: 0,
+                    progress_message: String::new(),
+                }
+            }
+            KeyCode::Char('q') => {
+                *running = false;
+                BatchScreen::ConfirmGlobal {
+                    items,
+                    cursor,
+                    force_mode,
+                }
+            }
+            _ => BatchScreen::ConfirmGlobal {
                 items,
                 cursor,
                 force_mode,
@@ -525,6 +614,17 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
             let help_text = t("batch_help_scan");
             let help_widget =
                 Paragraph::new(help_text).style(Style::default().fg(Color::Black).bg(Color::Cyan));
+            frame.render_widget(help_widget, layout_chunks[2]);
+        }
+
+        BatchScreen::ConfirmGlobal { .. } => {
+            let confirm_text = Paragraph::new(t("batch_global_confirm"))
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: true });
+            frame.render_widget(confirm_text, layout_chunks[1]);
+
+            let help_widget = Paragraph::new(" [Enter] Confirmar | [Esc] Cancelar | [q] Sair ")
+                .style(Style::default().fg(Color::Black).bg(Color::Cyan));
             frame.render_widget(help_widget, layout_chunks[2]);
         }
 

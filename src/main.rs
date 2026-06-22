@@ -108,6 +108,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             _ => {}
                         },
+                        Modal::BlockedPolicy(_, _) => match key.code {
+                            KeyCode::Enter | KeyCode::Esc => {
+                                app.modal = Modal::None;
+                            }
+                            _ => {}
+                        },
+                        Modal::ConfirmGlobal(_, _) => match key.code {
+                            KeyCode::Enter => app.confirm_global_upgrade(),
+                            KeyCode::Esc => {
+                                app.modal = Modal::None;
+                            }
+                            _ => {}
+                        },
                         Modal::None => match key.code {
                             KeyCode::Char('q') => break,
                             KeyCode::Up => app.scroll_up(),

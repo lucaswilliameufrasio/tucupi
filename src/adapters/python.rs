@@ -70,6 +70,7 @@ impl PythonAdapter {
                         latest_version,
                         ecosystem: Ecosystem::Python,
                         is_global: false,
+                        origin: None,
                     });
                 }
             }

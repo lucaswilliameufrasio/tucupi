@@ -146,6 +146,7 @@ impl JsTsAdapter {
                                         latest_version: latest,
                                         ecosystem,
                                         is_global: false,
+                                        origin: None,
                                     });
                                 }
                             }

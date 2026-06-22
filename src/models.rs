@@ -15,6 +15,23 @@ pub enum Ecosystem {
     Homebrew,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PackageOrigin {
+    OfficialRepo,
+    Aur,
+    Unknown,
+}
+
+impl PackageOrigin {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PackageOrigin::OfficialRepo => "Official Repo",
+            PackageOrigin::Aur => "AUR",
+            PackageOrigin::Unknown => "Unknown",
+        }
+    }
+}
+
 impl Ecosystem {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -71,6 +88,7 @@ pub struct Dependency {
     pub latest_version: String,
     pub ecosystem: Ecosystem,
     pub is_global: bool,
+    pub origin: Option<PackageOrigin>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

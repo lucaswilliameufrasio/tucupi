@@ -236,7 +236,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
         let detail_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(4),
                 Constraint::Length(2),
                 Constraint::Min(5),
             ])
@@ -244,10 +244,19 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
         f.render_widget(detail_block, body_chunks[1]);
 
+        let origin_text = dep.origin.map_or_else(
+            || t("origin_unknown"),
+            |origin| match origin {
+                crate::models::PackageOrigin::OfficialRepo => t("origin_official"),
+                crate::models::PackageOrigin::Aur => t("origin_aur"),
+                crate::models::PackageOrigin::Unknown => t("origin_unknown"),
+            },
+        );
         let metadata_text = format!(
-            "{}\n{}\n{}",
+            "{}\n{}\n{}\n{}",
             tf("detail_package", &[&dep.name]),
             tf("detail_ecosystem", &[dep.ecosystem.as_str()]),
+            tf("detail_origin", &[origin_text]),
             tf(
                 "detail_version",
                 &[&dep.current_version, &dep.latest_version]
@@ -460,6 +469,45 @@ pub fn render(f: &mut Frame, app: &mut App) {
                 text.push_str(&tf("modal_blocked_item", &[&vuln.id, &vuln.summary]));
             }
             text.push_str(t("modal_blocked_footer"));
+
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .style(Style::default().fg(Color::White))
+                .wrap(Wrap { trim: true });
+
+            f.render_widget(paragraph, area);
+        }
+        Modal::BlockedPolicy(_dep, message) => {
+            let area = centered_rect(65, 50, size);
+            f.render_widget(Clear, area);
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .title(t("modal_policy_title"))
+                .border_style(Style::default().fg(Color::Red));
+
+            let mut text = message.clone();
+            text.push_str(t("modal_policy_footer"));
+
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .style(Style::default().fg(Color::White))
+                .wrap(Wrap { trim: true });
+
+            f.render_widget(paragraph, area);
+        }
+        Modal::ConfirmGlobal(_dep, command_preview) => {
+            let area = centered_rect(65, 50, size);
+            f.render_widget(Clear, area);
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .title(t("modal_global_title"))
+                .border_style(Style::default().fg(Color::Yellow));
+
+            let text = tf("modal_global_msg", &[command_preview]);
 
             let paragraph = Paragraph::new(text)
                 .block(block)

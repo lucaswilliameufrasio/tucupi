@@ -52,6 +52,7 @@ impl PhpAdapter {
                         latest_version: latest,
                         ecosystem: Ecosystem::Php,
                         is_global: false,
+                        origin: None,
                     });
                 }
             }

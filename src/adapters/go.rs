@@ -44,6 +44,7 @@ impl GoAdapter {
                         latest_version: latest,
                         ecosystem: Ecosystem::Go,
                         is_global: false,
+                        origin: None,
                     });
                 }
             }

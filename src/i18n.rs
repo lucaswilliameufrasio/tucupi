@@ -36,6 +36,7 @@ fn pt_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("detail_title", " Auditoria de Segurança & Detalhes ");
         m.insert("detail_package", "Pacote: {0}");
         m.insert("detail_ecosystem", "Ecossistema: {0}");
+        m.insert("detail_origin", "Origem: {0}");
         m.insert("detail_version", "Versão Atual: {0}  ➔  Nova Versão: {1}");
         m.insert("upgrade_in_progress", " ⏳ Upgrade em andamento...");
         m.insert("upgrade_success", " ✓ Upgrade concluído com sucesso!");
@@ -63,6 +64,15 @@ fn pt_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("modal_blocked_msg", "O pacote {0} possui vulnerabilidades de segurança na versão alvo ({1}).\n\nDe acordo com a configuração de política em 'tucupi.toml' (block_vulnerable = true), upgrades para versões vulneráveis estão TERMINANTEMENTE PROIBIDOS.\n\nVulnerabilidades impeditivas:\n\n");
         m.insert("modal_blocked_item", "  * ID: {0} - {1}\n");
         m.insert("modal_blocked_footer", "\n\nPressione [Esc] ou [Enter] para fechar este alerta.");
+        m.insert("modal_policy_title", " ⛔ BLOQUEADO POR POLÍTICA ");
+        m.insert("modal_policy_footer", "\n\nPressione [Esc] ou [Enter] para fechar.");
+        m.insert("modal_global_title", " ⚠️ CONFIRMAR UPGRADE GLOBAL ");
+        m.insert("modal_global_msg", "Você está prestes a atualizar um pacote global ou do sistema.\n\nComando:\n{0}\n\nPressione [Enter] para confirmar ou [Esc] para cancelar.");
+        m.insert("blocked_online_required", "A auditoria de segurança online falhou: {0}. A política local exige validação online antes de atualizar.");
+        m.insert("blocked_aur_disabled", "Pacotes AUR estão desabilitados por política local. Habilite `security.aur_enabled = true` para permitir upgrades AUR.");
+        m.insert("origin_official", "Repositório Oficial");
+        m.insert("origin_aur", "AUR");
+        m.insert("origin_unknown", "Desconhecida");
         // batch mode
         m.insert("batch_title", " 🍵 TUCUPI :: Modo Interativo ");
         m.insert("batch_scanning", " Escaneando dependências em todos os ecossistemas...\n\n Isso pode levar alguns segundos.");
@@ -71,6 +81,7 @@ fn pt_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("batch_help_select", " [↑↓] Navegar | [Espaço] Ciclar ([ ]→[✓]→[⚡]) | [Enter] Executar | [q] Sair     Selecionados: {0}  Forçar: {1}");
         m.insert("batch_help_exec", " [q] Sair ");
         m.insert("batch_help_report", " [q] Sair | [r] Re-escanear ");
+        m.insert("batch_global_confirm", " Há pacotes globais ou do sistema selecionados.\n\nPressione [Enter] para confirmar a execução do lote ou [Esc] para voltar.");
         m.insert("batch_exec_title", " Executando upgrades... ({0}/{1})");
         m.insert("batch_report_title", " Relatório de Atualizações ");
         m.insert("batch_report_safe", " ✓ ATUALIZADOS COM SEGURANÇA ({0})");
@@ -138,6 +149,7 @@ fn en_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("detail_title", " Security Audit & Details ");
         m.insert("detail_package", "Package: {0}");
         m.insert("detail_ecosystem", "Ecosystem: {0}");
+        m.insert("detail_origin", "Origin: {0}");
         m.insert("detail_version", "Current: {0}  ➔  Latest: {1}");
         m.insert("upgrade_in_progress", " ⏳ Upgrade in progress...");
         m.insert("upgrade_success", " ✓ Upgrade completed successfully!");
@@ -165,6 +177,15 @@ fn en_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("modal_blocked_msg", "Package {0} has security vulnerabilities in the target version ({1}).\n\nAccording to the policy in 'tucupi.toml' (block_vulnerable = true), upgrades to vulnerable versions are STRICTLY PROHIBITED.\n\nBlocking vulnerabilities:\n\n");
         m.insert("modal_blocked_item", "  * ID: {0} - {1}\n");
         m.insert("modal_blocked_footer", "\n\nPress [Esc] or [Enter] to close this alert.");
+        m.insert("modal_policy_title", " ⛔ BLOCKED BY POLICY ");
+        m.insert("modal_policy_footer", "\n\nPress [Esc] or [Enter] to close.");
+        m.insert("modal_global_title", " ⚠️ CONFIRM GLOBAL UPGRADE ");
+        m.insert("modal_global_msg", "You are about to upgrade a global or system package.\n\nCommand:\n{0}\n\nPress [Enter] to confirm or [Esc] to cancel.");
+        m.insert("blocked_online_required", "Online security auditing failed: {0}. Local policy requires online validation before upgrading.");
+        m.insert("blocked_aur_disabled", "AUR packages are disabled by local policy. Set `security.aur_enabled = true` to allow AUR upgrades.");
+        m.insert("origin_official", "Official Repo");
+        m.insert("origin_aur", "AUR");
+        m.insert("origin_unknown", "Unknown");
         // batch mode
         m.insert("batch_title", " 🍵 TUCUPI :: Interactive Mode ");
         m.insert("batch_scanning", " Scanning dependencies across all ecosystems...\n\n This may take a few seconds.");
@@ -173,6 +194,7 @@ fn en_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("batch_help_select", " [↑↓] Navigate | [Space] Toggle ([ ]→[✓]→[⚡]) | [Enter] Execute | [q] Quit     Selected: {0}  Force: {1}");
         m.insert("batch_help_exec", " [q] Quit ");
         m.insert("batch_help_report", " [q] Quit | [r] Re-scan ");
+        m.insert("batch_global_confirm", " Global or system packages are selected.\n\nPress [Enter] to confirm the batch execution or [Esc] to go back.");
         m.insert("batch_exec_title", " Executing upgrades... ({0}/{1})");
         m.insert("batch_report_title", " Upgrade Report ");
         m.insert("batch_report_safe", " ✓ SAFELY UPGRADED ({0})");

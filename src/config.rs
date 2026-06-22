@@ -7,6 +7,14 @@ pub struct SecurityConfig {
     #[serde(default)]
     pub block_vulnerable: Option<bool>,
     #[serde(default)]
+    pub require_online: Option<bool>,
+    #[serde(default)]
+    pub require_provenance: Option<bool>,
+    #[serde(default)]
+    pub aur_enabled: Option<bool>,
+    #[serde(default)]
+    pub confirm_global: Option<bool>,
+    #[serde(default)]
     pub ignored_packages: Option<HashSet<String>>,
     #[serde(default)]
     pub ignored_vulnerabilities: Option<HashSet<String>>,
@@ -47,6 +55,22 @@ impl Config {
 
     pub fn block_vulnerable(&self) -> bool {
         self.security.block_vulnerable.unwrap_or(false)
+    }
+
+    pub fn require_online(&self) -> bool {
+        self.security.require_online.unwrap_or(true)
+    }
+
+    pub fn require_provenance(&self) -> bool {
+        self.security.require_provenance.unwrap_or(true)
+    }
+
+    pub fn aur_enabled(&self) -> bool {
+        self.security.aur_enabled.unwrap_or(false)
+    }
+
+    pub fn confirm_global(&self) -> bool {
+        self.security.confirm_global.unwrap_or(true)
     }
 
     pub fn is_package_ignored(&self, name: &str) -> bool {
@@ -90,6 +114,10 @@ mod tests {
     fn test_config_defaults() {
         let config = Config::default();
         assert!(!config.block_vulnerable());
+        assert!(config.require_online());
+        assert!(config.require_provenance());
+        assert!(!config.aur_enabled());
+        assert!(config.confirm_global());
         assert!(!config.is_package_ignored("any-pkg"));
         assert!(!config.is_vulnerability_ignored("GHSA-1234"));
         assert_eq!(config.osv_timeout_secs(), 5);
@@ -102,6 +130,10 @@ mod tests {
         let content = r#"
             [security]
             block_vulnerable = true
+            require_online = false
+            require_provenance = false
+            aur_enabled = true
+            confirm_global = false
             ignored_packages = ["lodash", "serde"]
             ignored_vulnerabilities = ["GHSA-xxxx-yyyy"]
             osv_timeout_secs = 10
@@ -110,6 +142,10 @@ mod tests {
         "#;
         let config: Config = toml::from_str(content).unwrap();
         assert!(config.block_vulnerable());
+        assert!(!config.require_online());
+        assert!(!config.require_provenance());
+        assert!(config.aur_enabled());
+        assert!(!config.confirm_global());
         assert!(config.is_package_ignored("lodash"));
         assert!(config.is_package_ignored("serde"));
         assert!(!config.is_package_ignored("anyhow"));

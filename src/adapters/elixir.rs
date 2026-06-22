@@ -52,6 +52,7 @@ impl ElixirAdapter {
                             latest_version: latest,
                             ecosystem: Ecosystem::Elixir,
                             is_global: false,
+                            origin: None,
                         });
                     }
                 }

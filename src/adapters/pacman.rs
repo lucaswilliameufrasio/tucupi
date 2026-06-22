@@ -1,4 +1,4 @@
-use crate::models::{Dependency, Ecosystem};
+use crate::models::{Dependency, Ecosystem, PackageOrigin};
 use anyhow::Result;
 use std::path::Path;
 use tokio::process::Command;
@@ -49,6 +49,7 @@ impl PacmanAdapter {
                                     latest_version,
                                     ecosystem: Ecosystem::Pacman,
                                     is_global: true,
+                                    origin: Some(PackageOrigin::OfficialRepo),
                                 });
                             }
                         }
@@ -86,6 +87,7 @@ impl PacmanAdapter {
                                     latest_version,
                                     ecosystem: Ecosystem::Pacman,
                                     is_global: true,
+                                    origin: Some(PackageOrigin::Aur),
                                 });
                             }
                         }

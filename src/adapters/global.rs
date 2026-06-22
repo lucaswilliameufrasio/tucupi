@@ -75,6 +75,7 @@ impl GlobalAdapter {
                         latest_version: latest,
                         ecosystem: Ecosystem::Npm,
                         is_global: true,
+                        origin: None,
                     });
                 }
             }
@@ -149,6 +150,7 @@ impl GlobalAdapter {
                                         latest_version: latest,
                                         ecosystem: Ecosystem::Cargo,
                                         is_global: true,
+                                        origin: None,
                                     });
                                 }
                             }
@@ -208,6 +210,7 @@ impl GlobalAdapter {
                         latest_version: latest,
                         ecosystem: Ecosystem::Npm,
                         is_global: true,
+                        origin: None,
                     });
                 }
             }
@@ -259,6 +262,7 @@ impl GlobalAdapter {
                                     latest_version: latest,
                                     ecosystem: Ecosystem::Npm,
                                     is_global: true,
+                                    origin: None,
                                 });
                             }
                         }

@@ -63,6 +63,7 @@ impl HomebrewAdapter {
                     latest_version: pkg.current_version,
                     ecosystem: Ecosystem::Homebrew,
                     is_global: true,
+                    origin: None,
                 });
             }
         }
@@ -80,6 +81,7 @@ impl HomebrewAdapter {
                     latest_version: pkg.current_version,
                     ecosystem: Ecosystem::Homebrew,
                     is_global: true,
+                    origin: None,
                 });
             }
         }

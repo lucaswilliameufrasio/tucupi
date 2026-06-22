@@ -102,6 +102,7 @@ impl CargoAdapter {
                                         latest_version: latest,
                                         ecosystem: Ecosystem::Cargo,
                                         is_global: false,
+                                        origin: None,
                                     });
                                 }
                             }

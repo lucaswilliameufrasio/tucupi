@@ -56,6 +56,7 @@ impl DartAdapter {
                             latest_version: latest,
                             ecosystem: Ecosystem::Dart,
                             is_global: false,
+                            origin: None,
                         });
                     }
                 }
