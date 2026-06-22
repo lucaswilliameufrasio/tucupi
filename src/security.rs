@@ -1,10 +1,18 @@
+use crate::cache::{read_cache, write_cache};
 use crate::config::Config;
 use crate::models::{Ecosystem, FreshnessInfo, ProvenanceInfo, VulnerabilityInfo};
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+const EXTERNAL_REQUEST_LIMIT: usize = 8;
+const VULN_CACHE_TTL_SECS: u64 = 6 * 60 * 60;
+const FRESHNESS_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+const PROVENANCE_CACHE_TTL_SECS: u64 = 24 * 60 * 60;
 
 #[derive(Debug, Deserialize)]
 struct OsvVulnerability {
@@ -60,6 +68,15 @@ impl SecurityChecker {
         version: &str,
         ecosystem: Ecosystem,
     ) -> Result<Vec<VulnerabilityInfo>> {
+        let cache_key = format!("{}:{}:{}", ecosystem.as_str(), name, version);
+        if let Some(cached) = read_cache(
+            "vulnerabilities",
+            &cache_key,
+            Duration::from_secs(VULN_CACHE_TTL_SECS),
+        ) {
+            return Ok(cached);
+        }
+
         let osv_future = self.check_osv(name, version, ecosystem);
         let nvd_future = self.check_nvd(name, version);
 
@@ -77,6 +94,8 @@ impl SecurityChecker {
             }
         }
 
+        let _ = write_cache("vulnerabilities", &cache_key, &all_vulns);
+
         Ok(all_vulns)
     }
 
@@ -86,6 +105,7 @@ impl SecurityChecker {
         version: &str,
         ecosystem: Ecosystem,
     ) -> Result<Vec<VulnerabilityInfo>> {
+        let _permit = acquire_external_request().await;
         let url = "https://api.osv.dev/v1/query";
         let payload = json!({
             "package": {
@@ -131,6 +151,7 @@ impl SecurityChecker {
     }
 
     async fn check_nvd(&self, name: &str, version: &str) -> Result<Vec<VulnerabilityInfo>> {
+        let _permit = acquire_external_request().await;
         let search = format!("{} {}", name, version);
         let url = reqwest::Url::parse_with_params(
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
@@ -216,6 +237,15 @@ impl SecurityChecker {
         very_recent_days: i64,
         threshold_days: i64,
     ) -> FreshnessInfo {
+        let cache_key = format!("{}:{}:{}", ecosystem.as_str(), name, version);
+        if let Some(cached) = read_cache(
+            "freshness",
+            &cache_key,
+            Duration::from_secs(FRESHNESS_CACHE_TTL_SECS),
+        ) {
+            return cached;
+        }
+
         let published = match ecosystem {
             Ecosystem::Cargo => self.check_cargo_freshness(name, version).await,
             Ecosystem::Npm => self.check_npm_freshness(name, version).await,
@@ -223,19 +253,24 @@ impl SecurityChecker {
         };
 
         let Some(published) = published else {
-            return FreshnessInfo::Unavailable;
+            let freshness = FreshnessInfo::Unavailable;
+            let _ = write_cache("freshness", &cache_key, &freshness);
+            return freshness;
         };
 
         let now = time::OffsetDateTime::now_utc();
         let age_days = (now - published).whole_days();
 
-        if age_days < very_recent_days {
+        let freshness = if age_days < very_recent_days {
             FreshnessInfo::VeryRecent(age_days)
         } else if age_days < threshold_days {
             FreshnessInfo::Recent(age_days)
         } else {
             FreshnessInfo::Mature(age_days)
-        }
+        };
+
+        let _ = write_cache("freshness", &cache_key, &freshness);
+        freshness
     }
 
     async fn check_cargo_freshness(
@@ -243,6 +278,7 @@ impl SecurityChecker {
         name: &str,
         version: &str,
     ) -> Option<time::OffsetDateTime> {
+        let _permit = acquire_external_request().await;
         let url = format!("https://crates.io/api/v1/crates/{}/versions", name);
         let resp = self.client.get(&url).send().await.ok()?;
         if !resp.status().is_success() {
@@ -265,6 +301,7 @@ impl SecurityChecker {
     }
 
     async fn check_npm_freshness(&self, name: &str, version: &str) -> Option<time::OffsetDateTime> {
+        let _permit = acquire_external_request().await;
         let url = format!("https://registry.npmjs.org/{}", name);
         let resp = self.client.get(&url).send().await.ok()?;
         if !resp.status().is_success() {
@@ -309,7 +346,16 @@ fn parse_osv_vuln(v: OsvVulnerability) -> VulnerabilityInfo {
 }
 
 pub async fn check_provenance(name: &str, ecosystem: Ecosystem) -> ProvenanceInfo {
-    match ecosystem {
+    let cache_key = format!("{}:{}", ecosystem.as_str(), name);
+    if let Some(cached) = read_cache(
+        "provenance",
+        &cache_key,
+        Duration::from_secs(PROVENANCE_CACHE_TTL_SECS),
+    ) {
+        return cached;
+    }
+
+    let info = match ecosystem {
         Ecosystem::Pacman => check_pacman_provenance(name).await,
         _ => ProvenanceInfo {
             validated_by: None,
@@ -317,7 +363,23 @@ pub async fn check_provenance(name: &str, ecosystem: Ecosystem) -> ProvenanceInf
             pkgbuild_age_days: None,
             signature_verified: false,
         },
-    }
+    };
+
+    let _ = write_cache("provenance", &cache_key, &info);
+    info
+}
+
+fn request_semaphore() -> &'static Arc<Semaphore> {
+    static SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    SEMAPHORE.get_or_init(|| Arc::new(Semaphore::new(EXTERNAL_REQUEST_LIMIT)))
+}
+
+async fn acquire_external_request() -> OwnedSemaphorePermit {
+    request_semaphore()
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("external request semaphore closed")
 }
 
 async fn check_pacman_provenance(name: &str) -> ProvenanceInfo {
