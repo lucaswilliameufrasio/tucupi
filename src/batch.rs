@@ -2,7 +2,9 @@ use crate::adapters::{check_all_outdated, check_global_outdated};
 use crate::app::{get_upgrade_cmd, run_upgrade_process};
 use crate::config::Config;
 use crate::i18n::{t, tf};
-use crate::models::{Dependency, Ecosystem, PackageOrigin, ProvenanceInfo, VulnerabilityInfo};
+use crate::models::{
+    Dependency, Ecosystem, FreshnessInfo, PackageOrigin, ProvenanceInfo, VulnerabilityInfo,
+};
 use crate::security::{check_provenance, SecurityChecker};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -69,13 +71,15 @@ enum BatchScreen {
     },
 }
 
+struct BatchSecurityResult {
+    vuln_result: Result<Vec<VulnerabilityInfo>, String>,
+    freshness_info: FreshnessInfo,
+    provenance_info: Option<ProvenanceInfo>,
+}
+
 enum BatchEvent {
     ScanFinished(Vec<Dependency>),
-    SecurityChecked(
-        usize,
-        Result<Vec<VulnerabilityInfo>, String>,
-        Option<ProvenanceInfo>,
-    ),
+    SecurityChecked(usize, BatchSecurityResult),
     UpgradeFinished(usize, Result<(), String>),
 }
 
@@ -136,12 +140,11 @@ pub async fn run(
                         force_mode: false,
                     };
                 }
-                BatchEvent::SecurityChecked(index, result, provenance_info) => {
+                BatchEvent::SecurityChecked(index, security_result) => {
                     let is_done = process_security_checked(
                         &mut screen,
                         index,
-                        result,
-                        provenance_info,
+                        security_result,
                         &config,
                         &target_dir,
                         &event_tx,
@@ -207,9 +210,18 @@ fn kick_off_security_checks(
         let dependency_latest = item.dependency.latest_version.clone();
         let ecosystem = item.dependency.ecosystem;
         let tx = event_tx.clone();
+        let very_recent_days = config.very_recent_days();
+        let threshold_days = config.freshness_threshold_days();
         tokio::spawn(async move {
-            let (result, provenance_info) = tokio::join!(
+            let (result, freshness_info, provenance_info) = tokio::join!(
                 checker.check_vulnerability(&dependency_name, &dependency_latest, ecosystem),
+                checker.check_freshness(
+                    &dependency_name,
+                    &dependency_latest,
+                    ecosystem,
+                    very_recent_days,
+                    threshold_days,
+                ),
                 async {
                     if ecosystem == Ecosystem::Pacman {
                         Some(check_provenance(&dependency_name, ecosystem).await)
@@ -220,8 +232,11 @@ fn kick_off_security_checks(
             );
             let _ = tx.send(BatchEvent::SecurityChecked(
                 index,
-                result.map_err(|error| error.to_string()),
-                provenance_info,
+                BatchSecurityResult {
+                    vuln_result: result.map_err(|error| error.to_string()),
+                    freshness_info,
+                    provenance_info,
+                },
             ));
         });
     }
@@ -263,8 +278,7 @@ fn vuln_count_style(count: usize) -> Style {
 fn process_security_checked(
     screen: &mut BatchScreen,
     index: usize,
-    result: Result<Vec<VulnerabilityInfo>, String>,
-    provenance_info: Option<ProvenanceInfo>,
+    security_result: BatchSecurityResult,
     config: &Config,
     target_dir: &Path,
     event_tx: &mpsc::UnboundedSender<BatchEvent>,
@@ -298,7 +312,8 @@ fn process_security_checked(
 
     if dependency.ecosystem == Ecosystem::Pacman
         && config.require_provenance()
-        && !provenance_info
+        && !security_result
+            .provenance_info
             .as_ref()
             .is_some_and(|info| info.signature_verified)
     {
@@ -308,7 +323,14 @@ fn process_security_checked(
         return *current_cursor >= items.len();
     }
 
-    let result = match result {
+    if config.block_too_fresh() && security_result.freshness_info.is_too_fresh() {
+        *progress_message = format!("[BLOCKED] {} — versão muito recente", dependency.name);
+        item.outcome = ItemOutcome::Blocked(t("blocked_too_fresh").to_string());
+        *current_cursor = current_cursor.saturating_add(1);
+        return *current_cursor >= items.len();
+    }
+
+    let result = match security_result.vuln_result {
         Ok(vulns) => {
             item.vulns = Some(vulns);
             Ok(())

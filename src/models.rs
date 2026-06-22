@@ -102,6 +102,29 @@ pub struct VulnerabilityInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FreshnessInfo {
+    VeryRecent(i64),
+    Recent(i64),
+    Mature(i64),
+    Unavailable,
+}
+
+impl FreshnessInfo {
+    pub fn age_days(&self) -> Option<i64> {
+        match self {
+            FreshnessInfo::VeryRecent(days)
+            | FreshnessInfo::Recent(days)
+            | FreshnessInfo::Mature(days) => Some(*days),
+            FreshnessInfo::Unavailable => None,
+        }
+    }
+
+    pub fn is_too_fresh(&self) -> bool {
+        matches!(self, FreshnessInfo::VeryRecent(_))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvenanceInfo {
     pub validated_by: Option<String>,
     pub install_date: Option<String>,

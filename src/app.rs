@@ -1,6 +1,7 @@
 use crate::adapters::{check_all_outdated, check_global_outdated};
 use crate::config::Config;
 use crate::i18n::{t, tf};
+use crate::models::FreshnessInfo;
 use crate::models::{Dependency, Ecosystem, PackageOrigin, ProvenanceInfo, VulnerabilityInfo};
 use crate::security::{check_provenance, SecurityChecker};
 use ratatui::widgets::TableState;
@@ -36,7 +37,7 @@ pub enum Modal {
 pub enum AppEvent {
     ScanFinished(Tab, Vec<Dependency>),
     SecurityChecked(Dependency, Result<Vec<VulnerabilityInfo>, String>, bool),
-    FreshnessChecked(Dependency, Option<i64>),
+    FreshnessChecked(Dependency, FreshnessInfo),
     ProvenanceChecked(Dependency, ProvenanceInfo),
     UpgradeFinished(Result<(), String>),
 }
@@ -52,7 +53,7 @@ pub struct App {
     pub status: AppStatus,
     pub modal: Modal,
     pub vuln_cache: HashMap<String, Result<Vec<VulnerabilityInfo>, String>>,
-    pub freshness_cache: HashMap<String, Option<i64>>,
+    pub freshness_cache: HashMap<String, FreshnessInfo>,
     pub provenance_cache: HashMap<String, ProvenanceInfo>,
     pub security_check_only: bool,
     pub batch_scan_pending: usize,
@@ -187,6 +188,15 @@ impl App {
             };
         }
 
+        if self.config.block_too_fresh()
+            && self
+                .freshness_cache
+                .get(&cache_key(dep))
+                .is_some_and(FreshnessInfo::is_too_fresh)
+        {
+            return Some(t("blocked_too_fresh").to_string());
+        }
+
         None
     }
 
@@ -207,6 +217,7 @@ impl App {
 
         let timeout = self.config.osv_timeout_secs();
         let threshold = self.config.freshness_threshold_days();
+        let very_recent = self.config.very_recent_days();
         let nvd_key = self.config.nvd_api_key();
 
         for dep in &all_deps {
@@ -244,10 +255,16 @@ impl App {
                 let d = dep.clone();
                 tokio::spawn(async move {
                     let checker = SecurityChecker::new_with_config(timeout, None);
-                    let age = checker
-                        .check_freshness(&d.name, &d.latest_version, d.ecosystem, threshold)
+                    let freshness = checker
+                        .check_freshness(
+                            &d.name,
+                            &d.latest_version,
+                            d.ecosystem,
+                            very_recent,
+                            threshold,
+                        )
                         .await;
-                    let _ = tx.send(AppEvent::FreshnessChecked(d, age));
+                    let _ = tx.send(AppEvent::FreshnessChecked(d, freshness));
                 });
             }
 
@@ -546,14 +563,14 @@ impl App {
             AppEvent::SecurityChecked(dep, res, from_pre_scan) => {
                 self.process_security_result(dep, res, from_pre_scan);
             }
-            AppEvent::FreshnessChecked(dep, age) => {
+            AppEvent::FreshnessChecked(dep, freshness) => {
                 let cache_key = format!(
                     "{}_{}_{}",
                     dep.ecosystem.as_str(),
                     dep.name,
                     dep.latest_version
                 );
-                self.freshness_cache.insert(cache_key, age);
+                self.freshness_cache.insert(cache_key, freshness);
             }
             AppEvent::ProvenanceChecked(dep, info) => {
                 let cache_key = format!(

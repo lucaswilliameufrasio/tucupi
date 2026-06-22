@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::models::{Ecosystem, ProvenanceInfo, VulnerabilityInfo};
+use crate::models::{Ecosystem, FreshnessInfo, ProvenanceInfo, VulnerabilityInfo};
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
@@ -213,18 +213,29 @@ impl SecurityChecker {
         name: &str,
         version: &str,
         ecosystem: Ecosystem,
+        very_recent_days: i64,
         threshold_days: i64,
-    ) -> Option<i64> {
-        match ecosystem {
+    ) -> FreshnessInfo {
+        let published = match ecosystem {
             Ecosystem::Cargo => self.check_cargo_freshness(name, version).await,
             Ecosystem::Npm => self.check_npm_freshness(name, version).await,
             _ => None,
+        };
+
+        let Some(published) = published else {
+            return FreshnessInfo::Unavailable;
+        };
+
+        let now = time::OffsetDateTime::now_utc();
+        let age_days = (now - published).whole_days();
+
+        if age_days < very_recent_days {
+            FreshnessInfo::VeryRecent(age_days)
+        } else if age_days < threshold_days {
+            FreshnessInfo::Recent(age_days)
+        } else {
+            FreshnessInfo::Mature(age_days)
         }
-        .map(|published| {
-            let now = time::OffsetDateTime::now_utc();
-            (now - published).whole_days()
-        })
-        .filter(|age| *age < threshold_days)
     }
 
     async fn check_cargo_freshness(

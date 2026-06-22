@@ -112,7 +112,8 @@ fn pt_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("score_label", "CVSS: {0}");
         // freshness
         m.insert("freshness_warn", " ⚠️ Versão publicada há {0} dias — considerado recente. Verifique a procedência antes de atualizar.");
-        m.insert("freshness_ok", " ✓ Versão madura (publicada há mais de {0} dias).");
+        m.insert("freshness_ok", " ✓ Versão madura (publicada há {0} dias).");
+        m.insert("blocked_too_fresh", "A versão alvo foi publicada muito recentemente. A política local bloqueia upgrades para versões consideradas recentes demais.");
         // provenance
         m.insert("provenance_title", " 🛡 Proveniência");
         m.insert("provenance_signed", " ✓ Assinado por {0}");
@@ -226,7 +227,8 @@ fn en_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("score_label", "CVSS: {0}");
         // freshness
         m.insert("freshness_warn", " ⚠️ Version published {0} days ago — considered recent. Verify provenance before upgrading.");
-        m.insert("freshness_ok", " ✓ Version is mature (published more than {0} days ago).");
+        m.insert("freshness_ok", " ✓ Version is mature (published {0} days ago).");
+        m.insert("blocked_too_fresh", "The target version was published very recently. Local policy blocks upgrades to versions considered too fresh.");
         // provenance
         m.insert("provenance_title", " 🛡 Provenance");
         m.insert("provenance_signed", " ✓ Signed by {0}");

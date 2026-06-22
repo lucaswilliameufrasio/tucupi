@@ -1,6 +1,6 @@
 use crate::app::{App, AppStatus, Modal, Tab};
 use crate::i18n::{t, tf};
-use crate::models::{Ecosystem, VulnerabilityInfo};
+use crate::models::{Ecosystem, FreshnessInfo, VulnerabilityInfo};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -283,16 +283,18 @@ pub fn render(f: &mut Frame, app: &mut App) {
         let mut vuln_section = String::new();
 
         // Freshness
-        if let Some(age) = app.freshness_cache.get(&cache_key).and_then(|o| *o) {
-            if age < app.config.freshness_threshold_days() {
-                vuln_section.push_str(&tf("freshness_warn", &[&age.to_string()]));
-            } else {
-                vuln_section.push_str(&tf(
-                    "freshness_ok",
-                    &[&app.config.freshness_threshold_days().to_string()],
-                ));
+        if let Some(freshness) = app.freshness_cache.get(&cache_key) {
+            match freshness {
+                FreshnessInfo::VeryRecent(age) | FreshnessInfo::Recent(age) => {
+                    vuln_section.push_str(&tf("freshness_warn", &[&age.to_string()]));
+                    vuln_section.push('\n');
+                }
+                FreshnessInfo::Mature(age) => {
+                    vuln_section.push_str(&tf("freshness_ok", &[&age.to_string()]));
+                    vuln_section.push('\n');
+                }
+                FreshnessInfo::Unavailable => {}
             }
-            vuln_section.push('\n');
         }
 
         // Provenance

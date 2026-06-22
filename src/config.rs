@@ -25,6 +25,10 @@ pub struct SecurityConfig {
     #[serde(default)]
     pub freshness_threshold_days: Option<i64>,
     #[serde(default)]
+    pub block_too_fresh: Option<bool>,
+    #[serde(default)]
+    pub very_recent_days: Option<i64>,
+    #[serde(default)]
     pub nvd_api_key: Option<String>,
 }
 
@@ -101,6 +105,14 @@ impl Config {
         self.security.freshness_threshold_days.unwrap_or(7)
     }
 
+    pub fn block_too_fresh(&self) -> bool {
+        self.security.block_too_fresh.unwrap_or(false)
+    }
+
+    pub fn very_recent_days(&self) -> i64 {
+        self.security.very_recent_days.unwrap_or(3)
+    }
+
     pub fn nvd_api_key(&self) -> Option<String> {
         self.security.nvd_api_key.clone()
     }
@@ -123,6 +135,8 @@ mod tests {
         assert_eq!(config.osv_timeout_secs(), 5);
         assert!(config.pre_scan_security());
         assert_eq!(config.freshness_threshold_days(), 7);
+        assert!(!config.block_too_fresh());
+        assert_eq!(config.very_recent_days(), 3);
     }
 
     #[test]
@@ -139,6 +153,8 @@ mod tests {
             osv_timeout_secs = 10
             pre_scan_security = false
             freshness_threshold_days = 14
+            block_too_fresh = true
+            very_recent_days = 2
         "#;
         let config: Config = toml::from_str(content).unwrap();
         assert!(config.block_vulnerable());
@@ -154,5 +170,7 @@ mod tests {
         assert_eq!(config.osv_timeout_secs(), 10);
         assert!(!config.pre_scan_security());
         assert_eq!(config.freshness_threshold_days(), 14);
+        assert!(config.block_too_fresh());
+        assert_eq!(config.very_recent_days(), 2);
     }
 }
