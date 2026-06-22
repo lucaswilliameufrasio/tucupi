@@ -5,6 +5,7 @@ use crate::i18n::{t, tf};
 use crate::models::{
     Dependency, Ecosystem, FreshnessInfo, PackageOrigin, ProvenanceInfo, VulnerabilityInfo,
 };
+use crate::rollback::{commit_backup, prepare_local_backup, restore_backup};
 use crate::security::{check_provenance, SecurityChecker};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -463,8 +464,43 @@ fn spawn_upgrade(
     let (command, args) = get_upgrade_cmd(dependency, target_dir);
     let upgrade_tx = event_tx.clone();
     let target = target_dir.to_path_buf();
+    let dependency_for_backup = dependency.clone();
     tokio::spawn(async move {
+        let backup = if dependency_for_backup.is_global {
+            None
+        } else {
+            match prepare_local_backup(&dependency_for_backup, &target) {
+                Ok(backup) => backup,
+                Err(error) => {
+                    let _ = upgrade_tx.send(BatchEvent::UpgradeFinished(
+                        index,
+                        Err(format!("Failed to prepare rollback backup: {}", error)),
+                    ));
+                    return;
+                }
+            }
+        };
+
         let upgrade_result = run_upgrade_process(&command, args, &target, pipe).await;
+        let upgrade_result = match upgrade_result {
+            Ok(()) => {
+                if let Some(backup) = backup {
+                    commit_backup(backup);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                if let Some(backup) = backup {
+                    if let Err(restore_error) = restore_backup(backup) {
+                        Err(format!("{}\n\nRollback failed: {}", error, restore_error))
+                    } else {
+                        Err(error)
+                    }
+                } else {
+                    Err(error)
+                }
+            }
+        };
         let _ = upgrade_tx.send(BatchEvent::UpgradeFinished(index, upgrade_result));
     });
 }

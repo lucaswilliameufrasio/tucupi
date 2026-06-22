@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::i18n::{t, tf};
 use crate::models::FreshnessInfo;
 use crate::models::{Dependency, Ecosystem, PackageOrigin, ProvenanceInfo, VulnerabilityInfo};
+use crate::rollback::{commit_backup, prepare_local_backup, restore_backup};
 use crate::security::{check_provenance, SecurityChecker};
 use ratatui::widgets::TableState;
 use std::collections::HashMap;
@@ -521,8 +522,24 @@ impl App {
         let tx = self.event_tx.clone();
         let target_dir = self.target_dir.clone();
         let dep_name = dep.name.clone();
+        let dep_for_backup = dep.clone();
 
         tokio::spawn(async move {
+            let backup = if dep_for_backup.is_global {
+                None
+            } else {
+                match prepare_local_backup(&dep_for_backup, &target_dir) {
+                    Ok(backup) => backup,
+                    Err(error) => {
+                        let _ = tx.send(AppEvent::UpgradeFinished(Err(format!(
+                            "Failed to prepare rollback backup: {}",
+                            error
+                        ))));
+                        return;
+                    }
+                }
+            };
+
             let (cmd, args) = get_upgrade_cmd(&dep, &target_dir);
             let mut result = run_upgrade_process(&cmd, args, &target_dir, pipe_upgrade).await;
 
@@ -538,6 +555,26 @@ impl App {
                         .to_string());
                 }
             }
+
+            let result = match result {
+                Ok(()) => {
+                    if let Some(backup) = backup {
+                        commit_backup(backup);
+                    }
+                    Ok(())
+                }
+                Err(error) => {
+                    if let Some(backup) = backup {
+                        if let Err(restore_error) = restore_backup(backup) {
+                            Err(format!("{}\n\nRollback failed: {}", error, restore_error))
+                        } else {
+                            Err(error)
+                        }
+                    } else {
+                        Err(error)
+                    }
+                }
+            };
 
             let _ = tx.send(AppEvent::UpgradeFinished(result));
         });
