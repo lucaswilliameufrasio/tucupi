@@ -5,6 +5,7 @@ use crate::i18n::{t, tf};
 use crate::models::{
     Dependency, Ecosystem, FreshnessInfo, PackageOrigin, ProvenanceInfo, VulnerabilityInfo,
 };
+use crate::review::{ReviewReport, ReviewVerdict};
 use crate::rollback::{commit_backup, prepare_local_backup, restore_backup};
 use crate::security::{check_provenance, SecurityChecker};
 use std::path::{Path, PathBuf};
@@ -81,6 +82,7 @@ struct BatchSecurityResult {
 enum BatchEvent {
     ScanFinished(Vec<Dependency>),
     SecurityChecked(usize, BatchSecurityResult),
+    ReviewChecked(usize, ReviewReport),
     UpgradeFinished(usize, Result<(), String>),
 }
 
@@ -160,6 +162,17 @@ pub async fn run(
                 }
                 BatchEvent::UpgradeFinished(index, result) => {
                     let is_done = process_upgrade_finished(&mut screen, index, result);
+                    if is_done {
+                        if let BatchScreen::Executing { items, .. } =
+                            std::mem::replace(&mut screen, BatchScreen::Scanning)
+                        {
+                            screen = BatchScreen::Report { items };
+                        }
+                    }
+                }
+                BatchEvent::ReviewChecked(index, report) => {
+                    let is_done =
+                        process_review_checked(&mut screen, index, report, &target_dir, &event_tx);
                     if is_done {
                         if let BatchScreen::Executing { items, .. } =
                             std::mem::replace(&mut screen, BatchScreen::Scanning)
@@ -369,6 +382,20 @@ fn process_security_checked(
 
     let has_policy_issue =
         !filtered_vulns.is_empty() && !config.is_package_ignored(&dependency.name);
+
+    // Source review gate: AUR PKGBUILDs and Homebrew formulae are reviewed
+    // (residual diff + deterministic scan + LLM) before any upgrade spawns.
+    if crate::review::needs_review(dependency) && config.pkgbuild_review() {
+        *progress_message = tf("review_started", &[&dependency.name]);
+        let review_tx = event_tx.clone();
+        let review_dep = dependency.clone();
+        let review_config = config.clone();
+        tokio::spawn(async move {
+            let report = crate::review::review_package(&review_dep, &review_config).await;
+            let _ = review_tx.send(BatchEvent::ReviewChecked(index, report));
+        });
+        return false;
+    }
 
     if !has_policy_issue {
         *progress_message = format!(
@@ -1158,6 +1185,67 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
             let help_widget =
                 Paragraph::new(help_text).style(Style::default().fg(Color::Black).bg(Color::Cyan));
             frame.render_widget(help_widget, layout_chunks[2]);
+        }
+    }
+}
+
+fn process_review_checked(
+    screen: &mut BatchScreen,
+    index: usize,
+    report: ReviewReport,
+    target_dir: &Path,
+    event_tx: &mpsc::UnboundedSender<BatchEvent>,
+) -> bool {
+    let executing_state = match screen {
+        BatchScreen::Executing {
+            items,
+            current_cursor,
+            progress_message,
+        } => Some((items, current_cursor, progress_message)),
+        _ => None,
+    };
+
+    let (items, current_cursor, progress_message) = match executing_state {
+        Some(data) => data,
+        None => return false,
+    };
+
+    let item = &mut items[index];
+    let dependency = item.dependency.clone();
+
+    match report.verdict {
+        ReviewVerdict::Safe => {
+            *progress_message = format!(
+                "Upgrading {} to {}...",
+                dependency.name, dependency.latest_version
+            );
+            spawn_upgrade(index, &dependency, target_dir, event_tx);
+            false
+        }
+        ReviewVerdict::Block => {
+            // Known IoCs and LLM-blocked sources are hard stops: selection
+            // state never overrides a blocked package source.
+            *progress_message = format!("[BLOCKED] {} — {}", dependency.name, report.reason);
+            item.outcome = ItemOutcome::Blocked(tf("review_blocked", &[&report.reason]));
+            *current_cursor = current_cursor.saturating_add(1);
+            *current_cursor >= items.len()
+        }
+        ReviewVerdict::Review => {
+            if item.selection == SelectionState::Force && !report.has_known_ioc() {
+                item.outcome = ItemOutcome::ForceUpgraded;
+                *progress_message = format!(
+                    "Upgrading {} to {}... (forçado)",
+                    dependency.name, dependency.latest_version
+                );
+                spawn_upgrade(index, &dependency, target_dir, event_tx);
+                false
+            } else {
+                *progress_message = format!("[BLOCKED] {} — {}", dependency.name, report.reason);
+                item.outcome =
+                    ItemOutcome::Blocked(tf("review_needs_confirmation", &[&report.reason]));
+                *current_cursor = current_cursor.saturating_add(1);
+                *current_cursor >= items.len()
+            }
         }
     }
 }

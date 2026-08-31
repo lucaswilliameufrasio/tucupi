@@ -30,6 +30,12 @@ pub struct SecurityConfig {
     pub very_recent_days: Option<i64>,
     #[serde(default)]
     pub nvd_api_key: Option<String>,
+    #[serde(default)]
+    pub pkgbuild_review: Option<bool>,
+    #[serde(default)]
+    pub review_model: Option<String>,
+    #[serde(default)]
+    pub review_llm: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -116,6 +122,21 @@ impl Config {
     pub fn nvd_api_key(&self) -> Option<String> {
         self.security.nvd_api_key.clone()
     }
+
+    pub fn pkgbuild_review(&self) -> bool {
+        self.security.pkgbuild_review.unwrap_or(true)
+    }
+
+    pub fn review_model(&self) -> String {
+        self.security
+            .review_model
+            .clone()
+            .unwrap_or_else(|| crate::review::DEFAULT_REVIEW_MODEL.to_string())
+    }
+
+    pub fn review_llm(&self) -> bool {
+        self.security.review_llm.unwrap_or(true)
+    }
 }
 
 #[cfg(test)]
@@ -137,6 +158,9 @@ mod tests {
         assert_eq!(config.freshness_threshold_days(), 7);
         assert!(!config.block_too_fresh());
         assert_eq!(config.very_recent_days(), 3);
+        assert!(config.pkgbuild_review());
+        assert_eq!(config.review_model(), crate::review::DEFAULT_REVIEW_MODEL);
+        assert!(config.review_llm());
     }
 
     #[test]

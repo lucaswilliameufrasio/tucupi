@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::i18n::{t, tf};
 use crate::models::FreshnessInfo;
 use crate::models::{Dependency, Ecosystem, PackageOrigin, ProvenanceInfo, VulnerabilityInfo};
+use crate::review::{self, ReviewReport, ReviewVerdict};
 use crate::rollback::{commit_backup, prepare_local_backup, restore_backup};
 use crate::security::{check_provenance, SecurityChecker};
 use ratatui::widgets::TableState;
@@ -40,6 +41,7 @@ pub enum AppEvent {
     SecurityChecked(Dependency, Result<Vec<VulnerabilityInfo>, String>, bool),
     FreshnessChecked(Dependency, FreshnessInfo),
     ProvenanceChecked(Dependency, ProvenanceInfo),
+    ReviewChecked(Dependency, ReviewReport, bool, bool),
     UpgradeFinished(Result<(), String>),
 }
 
@@ -54,6 +56,7 @@ pub struct App {
     pub status: AppStatus,
     pub modal: Modal,
     pub vuln_cache: HashMap<String, Result<Vec<VulnerabilityInfo>, String>>,
+    pub review_cache: HashMap<String, ReviewReport>,
     pub freshness_cache: HashMap<String, FreshnessInfo>,
     pub provenance_cache: HashMap<String, ProvenanceInfo>,
     pub security_check_only: bool,
@@ -82,6 +85,7 @@ impl App {
             status: AppStatus::Ready,
             modal: Modal::None,
             vuln_cache: HashMap::new(),
+            review_cache: HashMap::new(),
             freshness_cache: HashMap::new(),
             provenance_cache: HashMap::new(),
             security_check_only: false,
@@ -318,7 +322,7 @@ impl App {
                     self.block_with_policy_message(dep, tf("blocked_online_required", &[err_msg]));
                 }
                 Err(_) if force => {
-                    self.start_upgrade(dep);
+                    self.start_upgrade(dep, true);
                 }
                 Err(err_msg) => {
                     self.status = AppStatus::UpgradeFailed(
@@ -404,6 +408,16 @@ impl App {
                 }
             }
         });
+
+        if review::needs_review(&dep) && self.config.pkgbuild_review() {
+            let review_tx = self.event_tx.clone();
+            let review_config = self.config.clone();
+            let review_dep = dep;
+            tokio::spawn(async move {
+                let report = review::review_package(&review_dep, &review_config).await;
+                let _ = review_tx.send(AppEvent::ReviewChecked(review_dep, report, false, true));
+            });
+        }
     }
 
     pub fn process_security_result(
@@ -471,6 +485,70 @@ impl App {
         }
     }
 
+    fn review_cache_key(&self, dep: &Dependency) -> String {
+        format!(
+            "{}_{}_{}_{}",
+            dep.ecosystem.as_str(),
+            dep.name,
+            dep.current_version,
+            dep.latest_version
+        )
+    }
+
+    fn spawn_pkgbuild_review(&mut self, dep: Dependency, force: bool) {
+        self.status = AppStatus::Upgrading(tf("review_started", &[&dep.name]));
+        let tx = self.event_tx.clone();
+        let config = self.config.clone();
+        tokio::spawn(async move {
+            let report = review::review_package(&dep, &config).await;
+            let _ = tx.send(AppEvent::ReviewChecked(dep, report, force, false));
+        });
+    }
+
+    fn process_review_result(
+        &mut self,
+        dep: Dependency,
+        report: ReviewReport,
+        force: bool,
+        audit_only: bool,
+    ) {
+        let cache_key = self.review_cache_key(&dep);
+        self.review_cache.insert(cache_key, report.clone());
+
+        if audit_only {
+            self.status = AppStatus::Ready;
+            if report.verdict != ReviewVerdict::Safe {
+                self.modal = Modal::BlockedPolicy(
+                    dep,
+                    tf(
+                        "review_audit_result",
+                        &[report.verdict.as_str(), &report.reason],
+                    ),
+                );
+            }
+            return;
+        }
+
+        match report.verdict {
+            ReviewVerdict::Safe => {
+                self.status = AppStatus::Ready;
+                self.start_upgrade(dep, force);
+            }
+            ReviewVerdict::Block => {
+                self.status = AppStatus::Ready;
+                self.block_with_policy_message(dep, tf("review_blocked", &[&report.reason]));
+            }
+            ReviewVerdict::Review => {
+                self.status = AppStatus::Ready;
+                if force {
+                    self.start_upgrade(dep, true);
+                } else {
+                    self.modal = Modal::ConfirmForce(dep, vec![review_to_vuln_info(&report)]);
+                }
+            }
+        }
+    }
+
     fn process_upgrade_with_vulns(
         &mut self,
         dep: Dependency,
@@ -488,20 +566,50 @@ impl App {
             .collect();
 
         if active_vulns.is_empty() || self.config.is_package_ignored(&dep.name) {
-            self.start_upgrade(dep);
+            self.start_upgrade(dep, force);
         } else if self.config.block_vulnerable() {
             self.modal = Modal::Blocked(dep, active_vulns);
             self.status = AppStatus::Ready;
         } else if force {
             self.modal = Modal::None;
-            self.start_upgrade(dep);
+            self.start_upgrade(dep, true);
         } else {
             self.modal = Modal::ConfirmForce(dep, active_vulns);
             self.status = AppStatus::Ready;
         }
     }
 
-    fn start_upgrade(&mut self, dep: Dependency) {
+    fn start_upgrade(&mut self, dep: Dependency, force: bool) {
+        if review::needs_review(&dep) && self.config.pkgbuild_review() {
+            let cache_key = self.review_cache_key(&dep);
+            let cached = self.review_cache.get(&cache_key).cloned();
+            match cached {
+                Some(report) => match report.verdict {
+                    ReviewVerdict::Safe => {}
+                    ReviewVerdict::Block => {
+                        self.status = AppStatus::Ready;
+                        self.block_with_policy_message(
+                            dep,
+                            tf("review_blocked", &[&report.reason]),
+                        );
+                        return;
+                    }
+                    ReviewVerdict::Review => {
+                        if !force {
+                            self.status = AppStatus::Ready;
+                            self.modal =
+                                Modal::ConfirmForce(dep, vec![review_to_vuln_info(&report)]);
+                            return;
+                        }
+                    }
+                },
+                None => {
+                    self.spawn_pkgbuild_review(dep, force);
+                    return;
+                }
+            }
+        }
+
         if dep.is_global && self.config.confirm_global() {
             let (command, args) = get_upgrade_cmd(&dep, &self.target_dir);
             let command_line = format!("{} {}", command, args.join(" "));
@@ -618,6 +726,9 @@ impl App {
                     dep.latest_version
                 );
                 self.provenance_cache.insert(cache_key, info);
+            }
+            AppEvent::ReviewChecked(dep, report, force, audit_only) => {
+                self.process_review_result(dep, report, force, audit_only);
             }
             AppEvent::UpgradeFinished(res) => match res {
                 Ok(_) => {
@@ -838,6 +949,30 @@ pub(crate) async fn run_upgrade_process(
     dir: &Path,
     pipe: bool,
 ) -> Result<(), String> {
+    // Commands that require root must never spawn an interactive sudo prompt
+    // inside the TUI/batch runner: the password prompt cannot be answered
+    // (raw mode or piped stdio) and would hang until the timeout.
+    const ROOT_REQUIRED_COMMANDS: &[&str] = &["pacman", "paru"];
+    if ROOT_REQUIRED_COMMANDS.contains(&cmd) {
+        let sudo_cached = tokio::process::Command::new("sudo")
+            .args(["-n", "true"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|status| status.success())
+            .unwrap_or(false);
+
+        if !sudo_cached {
+            return Err(
+                "Sudo credentials are not cached. Run 'sudo -v' in your terminal before \
+                 launching tucupi, or upgrade this package manually. Refusing to spawn an \
+                 interactive sudo prompt inside the TUI."
+                    .to_string(),
+            );
+        }
+    }
+
     if !pipe {
         let mut child = tokio::process::Command::new(cmd)
             .args(&args)
@@ -919,4 +1054,30 @@ fn cache_key(dep: &Dependency) -> String {
         dep.name,
         dep.latest_version
     )
+}
+
+fn review_to_vuln_info(report: &ReviewReport) -> VulnerabilityInfo {
+    let hits_summary = report
+        .hits
+        .iter()
+        .map(|hit| format!("[{}] {}", hit.pattern, hit.line))
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    VulnerabilityInfo {
+        id: "SOURCE_REVIEW".to_string(),
+        summary: report.reason.clone(),
+        details: if hits_summary.is_empty() {
+            format!(
+                "Residual diff lines: {}. Press Enter to force the upgrade anyway.",
+                report.residual_line_count
+            )
+        } else {
+            hits_summary
+        },
+        aliases: Vec::new(),
+        severity: Some("review".to_string()),
+        score: None,
+        sources: vec!["review".to_string()],
+    }
 }

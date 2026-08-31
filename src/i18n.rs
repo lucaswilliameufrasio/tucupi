@@ -95,6 +95,11 @@ fn pt_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("batch_done", "Concluído");
         m.insert("batch_forced", "Forçado");
         m.insert("exec_blocked", "[BLOCKED] {0} — bloqueado por política de segurança");
+        m.insert("review_started", "Revisando código-fonte do pacote {0}...");
+        m.insert("review_blocked", "[BLOCKED] Código-fonte do pacote bloqueado pela revisão: {0}");
+        m.insert("review_needs_confirmation", "Revisão do código-fonte inconclusiva: {0}. Forçar upgrade?");
+        m.insert("review_clean", "Revisão do código-fonte: seguro ({0})");
+        m.insert("review_audit_result", "Revisão de código-fonte [{0}: {1}]");
         m.insert("exec_skipped", "[SKIPPED] {0} — vulnerável, sem força habilitada");
         m.insert("exec_upgrading", "Upgrading {0} to {1}...");
         m.insert("exec_forced_msg", "[FORCED] {0} — upgrade forçado concluído");
@@ -210,6 +215,11 @@ fn en_strings() -> &'static HashMap<&'static str, &'static str> {
         m.insert("batch_done", "Done");
         m.insert("batch_forced", "Forced");
         m.insert("exec_blocked", "[BLOCKED] {0} — blocked by security policy");
+        m.insert("review_started", "Reviewing package source of {0}...");
+        m.insert("review_blocked", "[BLOCKED] Package source blocked by review: {0}");
+        m.insert("review_needs_confirmation", "Source review inconclusive: {0}. Force upgrade?");
+        m.insert("review_clean", "Source review: safe ({0})");
+        m.insert("review_audit_result", "Source review [{0}: {1}]");
         m.insert("exec_skipped", "[SKIPPED] {0} — vulnerable, force not enabled");
         m.insert("exec_upgrading", "Upgrading {0} to {1}...");
         m.insert("exec_forced_msg", "[FORCED] {0} — force upgrade completed");

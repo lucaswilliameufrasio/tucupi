@@ -2,7 +2,7 @@
 
 ## Overview
 
-Tucupi is a concurrent TUI dependency checker and upgrader with built-in security auditing via OSV.dev.
+Tucupi is a concurrent TUI dependency checker and upgrader with built-in security auditing via OSV.dev and package source review (AUR PKGBUILD / Homebrew formulae) before upgrades.
 
 ## Module Layout
 
@@ -12,10 +12,13 @@ src/
 ├── lib.rs            Library export (future)
 ├── app.rs            Application state machine, upgrade flow, security cache
 ├── batch.rs          Interactive batch mode (--interactive)
-├── config.rs         tucupi.toml parser (block_vulnerable, ignored packages)
+├── config.rs         tucupi.toml parser (all [security] keys, see README reference)
 ├── i18n.rs           Internationalization (pt-BR / en)
 ├── models.rs         Core types (Ecosystem, Dependency, VulnerabilityInfo)
-├── security.rs       OSV.dev vulnerability checker (async HTTP)
+├── security.rs       OSV.dev/NVD vulnerability checker, provenance, freshness
+├── review.rs         Package source review: residual diff, known-bad scan, LLM verdict
+├── cache.rs          Persistent disk cache (vulns, freshness, provenance, review)
+├── rollback.rs       Local backup/restore for project dependency upgrades
 ├── ui.rs             TUI rendering (ratatui)
 └── adapters/
     ├── mod.rs        Orchestrator (runs all adapters concurrently via tokio::join!)
@@ -29,6 +32,7 @@ src/
     ├── python.rs     Python (pip3 list --outdated)
     ├── pacman.rs     Arch Linux (pacman -Qu, paru -Qua)
     ├── mise.rs       Mise version manager (mise outdated)
+    ├── homebrew.rs   Homebrew (brew outdated --json --greedy)
     └── global.rs     Global packages (npm -g, pnpm -g, bun pm -g, cargo install --list)
 ```
 
@@ -36,12 +40,19 @@ src/
 
 1. **Scan**: All adapters run concurrently via `tokio::join!`
 2. **Display**: TUI shows the table (left) + detail panel (right)
-3. **Upgrade**: User selects dependency → OSV.dev security check → Upgrades concurrently
-4. **Batch**: `--interactive` mode → multi-select → batch security check → batch upgrade → report
+3. **Upgrade**: User selects dependency → OSV.dev/NVD security check → **package source
+   review** (AUR/Homebrew only: residual diff against the installed version's definition,
+   deterministic known-bad scan, LLM verdict) → sudo pre-flight for pacman/paru → upgrade
+4. **Batch**: `--interactive` mode → multi-select → batch security check → batch source
+   review → batch upgrade → report
 
 ## Security
 
 - All external commands use `tokio::process::Command` (no shell)
-- HTTP clients have 3-second timeouts
+- HTTP clients have 3-second timeouts (review fetches: 15s)
+- Root-requiring upgrade commands (`pacman`, `paru`) verify `sudo -n` first and fail
+  fast instead of spawning an interactive prompt inside the TUI
+- Package source content fetched from AUR/GitHub is treated as text only (diff +
+  substring scan) — never executed
 - Configuration files should have `0o600` permissions
 - System paths are blocked from operations

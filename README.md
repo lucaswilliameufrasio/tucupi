@@ -46,6 +46,24 @@ This is the perfect metaphor for dependency management:
   - All network requests and upgrade processes run concurrently via `tokio`.
   - Adapter scanning runs in parallel via `tokio::join!`.
 
+- **Package Source Review (AUR PKGBUILD + Homebrew formulae/casks):**
+  - Before upgrading an AUR package or a Homebrew formula/cask, tucupi diffs
+    the package definition against the version you already have installed
+    (AUR: paru clone cache; Homebrew: the tap commit matching the installed
+    version via the GitHub API).
+  - Version bumps and checksum noise are stripped, so only real code changes
+    remain. Known-bad patterns from supply-chain campaigns (e.g. the June 2026
+    Atomic Arch IoCs `atomic-lockfile`/`js-digest`) are a hard block.
+  - The residual diff (plus `.install` scripts / `post_install` blocks) is
+    sent to an LLM via `opencode run` for a `safe / review / block` verdict.
+    Verdicts are cached for 6 hours per package version.
+  - Pure version bumps (empty residual, no scanner hits) skip the LLM call
+    entirely — the fast path costs nothing.
+  - Block verdicts are fail-closed (force selection never overrides them);
+    inconclusive verdicts require explicit force confirmation.
+  - Upgrades that require root (`pacman`/`paru`) fail fast when sudo
+    credentials are not cached (`sudo -v`) instead of hanging the TUI.
+
 - **Configurable Security Policy (`tucupi.toml`):**
   - Place a `tucupi.toml` in your project root to enforce policies.
   - `block_vulnerable`: block upgrades to vulnerable versions.
@@ -60,6 +78,14 @@ This is the perfect metaphor for dependency management:
 ### Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (1.75+)
+- **Optional (package source review):** [`opencode`](https://opencode.ai) installed and
+  authenticated (`opencode run` must work in your terminal). Without it, review verdicts
+  fall back to `review` (fail closed) — or disable the LLM layer with `review_llm = false`.
+- **Optional (brew baseline lookup):** `GITHUB_TOKEN` in the environment raises the
+  GitHub API rate limit when resolving the commit matching the installed version.
+- **Arch/CachyOS only:** run `sudo -v` before launching tucupi when you plan to upgrade
+  pacman/paru packages — root-requiring upgrades fail fast instead of spawning an
+  interactive sudo prompt inside the TUI.
 
 ### Installation
 
@@ -139,18 +165,57 @@ tucupi --interactive
 
 ## 📂 Security Policy (`tucupi.toml`)
 
-Place a `tucupi.toml` in your project root:
+The config file is loaded from the **directory where you launch tucupi** (the target
+directory): `./tucupi.toml` next to your project for local scans, or e.g. `~/tucupi.toml`
+if you always launch `tucupi -g` from your home. No file at all is a valid setup — every
+key below has a safe default.
+
+### Reference — every `[security]` key
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `block_vulnerable` | bool | `false` | Block upgrades when the **target** version has active CVEs/GHSAs (OSV.dev + NVD). Without it, vulnerabilities are shown as warnings only. |
+| `require_online` | bool | `true` | Block upgrades when the security audit cannot reach OSV.dev/NVD. With `false`, audit failures allow upgrades (or ask for force). |
+| `require_provenance` | bool | `true` | Official pacman packages must have GPG signature validation (`Validated By` != None). AUR is unaffected. |
+| `aur_enabled` | bool | `false` | **AUR upgrades are blocked by default.** Set `true` to allow them (they then pass through the source review gate). |
+| `confirm_global` | bool | `true` | Ask for confirmation before every global package upgrade. |
+| `ignored_packages` | string list | `[]` | Skip security checks for these package names. |
+| `ignored_vulnerabilities` | string list | `[]` | Ignore specific CVE/GHSA ids (e.g. mitigated internally). |
+| `osv_timeout_secs` | u64 | `5` | HTTP timeout for OSV.dev/NVD requests. |
+| `pre_scan_security` | bool | `true` | Audit all listed dependencies in the background right after a scan (instead of auditing only on upgrade). |
+| `freshness_threshold_days` | i64 | `7` | Days after publication before a release is considered "mature" (informational). |
+| `block_too_fresh` | bool | `false` | Block upgrades to releases published less than `very_recent_days` ago. |
+| `very_recent_days` | i64 | `3` | The "too fresh" window used by `block_too_fresh`. |
+| `nvd_api_key` | string | none | NVD API key — raises NVD rate limits. Optional; OSV.dev is the primary source. |
+| `pkgbuild_review` | bool | `true` | **Package source review gate** for AUR PKGBUILDs and Homebrew formulae/casks: residual diff + deterministic scan + LLM verdict before upgrade. |
+| `review_model` | string | `"openai/gpt-5.6-luna"` | opencode model used by the source review triage (any id from `opencode models`). |
+| `review_llm` | bool | `true` | `false` = source review runs deterministic scan only (no API calls; inconclusive results require manual review). |
+
+### Example
 
 ```toml
 [security]
-# Block upgrades if the target version has known vulnerabilities
+# Vulnerabilities
 block_vulnerable = true
-
-# Skip security checks for specific packages
+require_online = true
 ignored_packages = ["legacy-package"]
-
-# Ignore specific CVEs or GHSAs already mitigated internally
 ignored_vulnerabilities = ["GHSA-xxxx-yyyy-zzzz", "CVE-2026-1234"]
+nvd_api_key = "your-nvd-key"                # optional
+
+# Freshness
+block_too_fresh = true
+very_recent_days = 3
+freshness_threshold_days = 7
+
+# AUR & global packages
+aur_enabled = true
+require_provenance = true
+confirm_global = true
+
+# Package source review
+pkgbuild_review = true
+review_model = "openai/gpt-5.6-luna"
+review_llm = true
 ```
 
 ## 🔧 Development
@@ -186,6 +251,7 @@ src/
 ├── config.rs         tucupi.toml parser
 ├── models.rs         Core types (Ecosystem, Dependency, Vulnerability)
 ├── security.rs       OSV.dev vulnerability checker
+├── review.rs         Package source review (residual diff + scan + LLM)
 ├── i18n.rs           Internationalization (pt-BR / en)
 └── adapters/         Ecosystem-specific outdated checkers
     ├── cargo.rs, go.rs, dart.rs, elixir.rs, js_ts.rs
