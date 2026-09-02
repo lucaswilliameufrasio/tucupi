@@ -24,7 +24,7 @@ Cada projeto que usa o `tucupi` pode (e deve) colocar um arquivo `tucupi.toml` n
 | `freshness_threshold_days` | i64 | `7` | Dias após publicação para a release ser considerada "madura" (informativo). |
 | `block_too_fresh` | bool | `false` | Bloqueia upgrades para releases publicadas há menos de `very_recent_days` dias. |
 | `very_recent_days` | i64 | `3` | Janela de "fresh demais" usada pelo `block_too_fresh`. |
-| `nvd_api_key` | string | — | Chave da API do NVD — sobe o rate limit. Opcional; OSV.dev é a fonte primária. |
+| `nvd_api_key` | string | — | Chave da API do NVD — sobe o rate limit. Opcional; OSV.dev é a fonte primária. **Mantenha em `tucupi.local.toml` (gitignored), nunca no `tucupi.toml` compartilhado.** |
 | `pkgbuild_review` | bool | `true` | **Gate de revisão de código-fonte** para PKGBUILDs do AUR e formulae/casks do Homebrew: diff residual + scanner determinístico + veredito de LLM antes do upgrade. |
 | `review_model` | string | `"openai/gpt-5.6-luna"` | Modelo do opencode usado na triagem (qualquer id do `opencode models`). |
 | `review_llm` | bool | `true` | `false` = revisão roda só o scanner determinístico (sem chamadas de API; resultado inconclusivo exige revisão manual). |
@@ -44,7 +44,6 @@ ignored_vulnerabilities = [
   "GHSA-p5w5-25g3-ccxp",
   "CVE-2026-9999"
 ]
-nvd_api_key = "sua-chave-nvd"  # opcional
 
 # Freshness
 block_too_fresh = true
@@ -61,6 +60,21 @@ pkgbuild_review = true
 review_model = "openai/gpt-5.6-luna"
 review_llm = true
 ```
+
+### Segredos (`tucupi.local.toml`)
+
+O `tucupi.toml` é feito para ser commitado e compartilhado com o time. Segredos
+(chave do NVD, por exemplo) vão no `tucupi.local.toml`, ao lado do arquivo
+compartilhado — o tucupi aplica esse arquivo **por cima** do compartilhado e
+ele já vem listado no `.gitignore` deste repositório:
+
+```toml
+# tucupi.local.toml  (nunca commitar este arquivo)
+[security]
+nvd_api_key = "sua-chave-nvd"
+```
+
+Ordem de carga: defaults → `tucupi.toml` → `tucupi.local.toml` (o último vence).
 
 ---
 

@@ -186,7 +186,7 @@ key below has a safe default.
 | `freshness_threshold_days` | i64 | `7` | Days after publication before a release is considered "mature" (informational). |
 | `block_too_fresh` | bool | `false` | Block upgrades to releases published less than `very_recent_days` ago. |
 | `very_recent_days` | i64 | `3` | The "too fresh" window used by `block_too_fresh`. |
-| `nvd_api_key` | string | none | NVD API key — raises NVD rate limits. Optional; OSV.dev is the primary source. |
+| `nvd_api_key` | string | none | NVD API key — raises NVD rate limits. Optional; OSV.dev is the primary source. **Keep it in `tucupi.local.toml` (gitignored), not in the shared `tucupi.toml`.** |
 | `pkgbuild_review` | bool | `true` | **Package source review gate** for AUR PKGBUILDs and Homebrew formulae/casks: residual diff + deterministic scan + LLM verdict before upgrade. |
 | `review_model` | string | `"openai/gpt-5.6-luna"` | opencode model used by the source review triage (any id from `opencode models`). |
 | `review_llm` | bool | `true` | `false` = source review runs deterministic scan only (no API calls; inconclusive results require manual review). |
@@ -200,7 +200,6 @@ block_vulnerable = true
 require_online = true
 ignored_packages = ["legacy-package"]
 ignored_vulnerabilities = ["GHSA-xxxx-yyyy-zzzz", "CVE-2026-1234"]
-nvd_api_key = "your-nvd-key"                # optional
 
 # Freshness
 block_too_fresh = true
@@ -217,6 +216,20 @@ pkgbuild_review = true
 review_model = "openai/gpt-5.6-luna"
 review_llm = true
 ```
+
+### Local overrides & secrets (`tucupi.local.toml`)
+
+`tucupi.toml` is meant to be committed and shared with your team. Anything
+secret belongs in a `tucupi.local.toml` next to it — tucupi overlays it on top
+of the shared file, and it is already listed in this repository's `.gitignore`:
+
+```toml
+# tucupi.local.toml  (never commit this file)
+[security]
+nvd_api_key = "your-nvd-key"
+```
+
+Load order: defaults → `tucupi.toml` → `tucupi.local.toml` (last one wins).
 
 ## 🔧 Development
 
