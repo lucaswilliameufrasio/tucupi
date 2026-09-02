@@ -7,5 +7,6 @@ pub mod i18n;
 pub mod models;
 pub mod review;
 pub mod rollback;
+pub mod secrets;
 pub mod security;
 pub mod ui;

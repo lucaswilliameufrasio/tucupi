@@ -319,12 +319,14 @@ fn kick_off_security_checks(
     event_tx: &mpsc::UnboundedSender<BatchEvent>,
     config: &Config,
 ) {
+    let secret_store = crate::secrets::default_secret_store();
+    let nvd_api_key = crate::secrets::resolve_nvd_api_key(&*secret_store);
     for (index, item) in items.iter().enumerate() {
         if item.selection == SelectionState::None {
             continue;
         }
         let checker =
-            SecurityChecker::new_with_config(config.osv_timeout_secs(), config.nvd_api_key());
+            SecurityChecker::new_with_config(config.osv_timeout_secs(), nvd_api_key.clone());
         let dependency_name = item.dependency.name.clone();
         let dependency_latest = item.dependency.latest_version.clone();
         let ecosystem = item.dependency.ecosystem;

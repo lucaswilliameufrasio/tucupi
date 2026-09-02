@@ -5,11 +5,13 @@ use crate::models::FreshnessInfo;
 use crate::models::{Dependency, Ecosystem, PackageOrigin, ProvenanceInfo, VulnerabilityInfo};
 use crate::review::{self, ReviewReport, ReviewVerdict};
 use crate::rollback::{commit_backup, prepare_local_backup, restore_backup};
+use crate::secrets::{resolve_nvd_api_key, SecretStore};
 use crate::security::{check_provenance, SecurityChecker};
 use ratatui::widgets::TableState;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
@@ -36,6 +38,7 @@ pub enum Modal {
     BlockedPolicy(Dependency, String),
     ConfirmForce(Dependency, Vec<VulnerabilityInfo>),
     ConfirmGlobal(Dependency, String),
+    SecretInput { buffer: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +93,7 @@ pub struct App {
     pub log_popup_tab: usize,
     pub log_popup_scroll_back: usize,
     pub detail_scroll: u16,
+    pub secret_store: Arc<dyn SecretStore>,
 
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
     pub event_rx: mpsc::UnboundedReceiver<AppEvent>,
@@ -125,6 +129,7 @@ impl App {
             log_popup_tab: 0,
             log_popup_scroll_back: 0,
             detail_scroll: 0,
+            secret_store: crate::secrets::default_secret_store(),
             event_tx,
             event_rx,
         }
@@ -250,6 +255,49 @@ impl App {
         self.log_popup_scroll_back = self.log_popup_scroll_back.saturating_sub(1);
     }
 
+    pub fn open_secret_input(&mut self) {
+        self.modal = Modal::SecretInput {
+            buffer: String::new(),
+        };
+    }
+
+    pub fn secret_input_push(&mut self, character: char) {
+        if let Modal::SecretInput { buffer } = &mut self.modal {
+            buffer.push(character);
+        }
+    }
+
+    pub fn secret_input_backspace(&mut self) {
+        if let Modal::SecretInput { buffer } = &mut self.modal {
+            buffer.pop();
+        }
+    }
+
+    pub fn save_nvd_key_from_input(&mut self) {
+        let value = match &self.modal {
+            Modal::SecretInput { buffer } => buffer.trim().to_string(),
+            _ => return,
+        };
+        self.modal = Modal::None;
+        if value.is_empty() {
+            self.push_toast(ToastKind::Error, t("toast_secret_empty").to_string());
+            return;
+        }
+        match self.secret_store.set_secret(&value) {
+            Ok(()) => self.push_toast(ToastKind::Success, t("toast_secret_saved").to_string()),
+            Err(err) => self.push_toast(ToastKind::Error, tf("toast_secret_save_failed", &[&err])),
+        }
+    }
+
+    pub fn remove_nvd_key(&mut self) {
+        match self.secret_store.delete_secret() {
+            Ok(()) => self.push_toast(ToastKind::Success, t("toast_secret_removed").to_string()),
+            Err(err) => {
+                self.push_toast(ToastKind::Error, tf("toast_secret_remove_failed", &[&err]))
+            }
+        }
+    }
+
     fn append_upgrade_log(&mut self, name: &str, line: String) {
         if let Some(log) = self.upgrade_logs.iter_mut().find(|log| log.name == name) {
             log.lines.push(line);
@@ -346,7 +394,7 @@ impl App {
         let timeout = self.config.osv_timeout_secs();
         let threshold = self.config.freshness_threshold_days();
         let very_recent = self.config.very_recent_days();
-        let nvd_key = self.config.nvd_api_key();
+        let nvd_key = resolve_nvd_api_key(&*self.secret_store);
 
         for dep in &all_deps {
             let cache_key = format!(
@@ -465,7 +513,7 @@ impl App {
         let tx = self.event_tx.clone();
         let checker = SecurityChecker::new_with_config(
             self.config.osv_timeout_secs(),
-            self.config.nvd_api_key(),
+            resolve_nvd_api_key(&*self.secret_store),
         );
         let d = dep.clone();
 
@@ -518,7 +566,7 @@ impl App {
         let tx = self.event_tx.clone();
         let checker = SecurityChecker::new_with_config(
             self.config.osv_timeout_secs(),
-            self.config.nvd_api_key(),
+            resolve_nvd_api_key(&*self.secret_store),
         );
         let d = dep.clone();
 

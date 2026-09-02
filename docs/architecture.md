@@ -8,11 +8,12 @@ Tucupi is a concurrent TUI dependency checker and upgrader with built-in securit
 
 ```
 src/
-├── main.rs           Entry point, CLI arg parsing, TUI/Interactive routing
-├── lib.rs            Library export (future)
+├── main.rs           Entry point, CLI arg parsing (incl. `config` subcommand), TUI/Interactive routing
+├── lib.rs            Library export
 ├── app.rs            Application state machine, upgrade flow, security cache
 ├── batch.rs          Interactive batch mode (--interactive)
 ├── config.rs         tucupi.toml parser (all [security] keys, see README reference)
+├── secrets.rs        SecretStore trait: OS keychain backend (keyring), NVD key resolution (keychain → env fallback), `config` CLI commands
 ├── i18n.rs           Internationalization (pt-BR / en)
 ├── models.rs         Core types (Ecosystem, Dependency, VulnerabilityInfo)
 ├── security.rs       OSV.dev/NVD vulnerability checker, provenance, freshness
@@ -54,5 +55,8 @@ src/
   fast instead of spawning an interactive prompt inside the TUI
 - Package source content fetched from AUR/GitHub is treated as text only (diff +
   substring scan) — never executed
+- Secrets (NVD API key) are stored in the OS keychain via the `SecretStore`
+  abstraction; the environment variable is a CI/headless fallback only and the
+  key value is never printed, logged, or persisted to project files
 - Configuration files should have `0o600` permissions
 - System paths are blocked from operations

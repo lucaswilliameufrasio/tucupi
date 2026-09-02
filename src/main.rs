@@ -21,12 +21,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut boot_global = false;
     let mut interactive = false;
 
+    if args.get(1).map(String::as_str) == Some("config") {
+        return tucupi::secrets::run_config_command(&args[2..]);
+    }
+
     for arg in &args[1..] {
         if arg == "--help" || arg == "-h" {
             println!("🍵 TUCUPI");
             println!();
             println!("USAGE:");
             println!("  tucupi [options] [directory]");
+            println!("  tucupi config <command>");
             println!();
             println!("OPTIONS:");
             println!("  -g, --global        Start on the Global Packages tab");
@@ -35,12 +40,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!();
             println!("  directory           Target project directory (default: current dir)");
             println!();
+            println!("CONFIG:");
+            println!(
+                "  tucupi config set-nvd-key     Store the NVD API key in the system keychain"
+            );
+            println!("  tucupi config remove-nvd-key  Remove the stored NVD API key");
+            println!("  tucupi config status          Show where the NVD API key is stored (never its value)");
+            println!();
             println!("EXAMPLES:");
             println!("  tucupi              Scan current directory and open TUI");
             println!("  tucupi -g           Open TUI on Global tab");
             println!("  tucupi -i           Interactive batch mode");
             println!("  tucupi /path/to/proj Scan a specific project");
             println!("  tucupi -i /path     Interactive mode in a specific directory");
+            println!("  tucupi config set-nvd-key");
             return Ok(());
         } else if arg == "--global" || arg == "-g" {
             boot_global = true;
@@ -137,6 +150,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                                 _ => {}
                             },
+                            Modal::SecretInput { .. } => match key.code {
+                                KeyCode::Enter => app.save_nvd_key_from_input(),
+                                KeyCode::Esc => app.modal = Modal::None,
+                                KeyCode::Backspace => app.secret_input_backspace(),
+                                KeyCode::Char(character) => app.secret_input_push(character),
+                                _ => {}
+                            },
                             Modal::None => match key.code {
                                 KeyCode::Char('q') => break,
                                 KeyCode::Up => app.scroll_up(),
@@ -149,6 +169,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 KeyCode::Char('f') => app.trigger_upgrade_selected(true),
                                 KeyCode::Char('c') => app.check_security_selected(),
                                 KeyCode::Char('l') => app.open_log_popup(),
+                                KeyCode::Char('k') => app.open_secret_input(),
+                                KeyCode::Char('K') => app.remove_nvd_key(),
                                 _ => {}
                             },
                         }

@@ -1,5 +1,4 @@
 use crate::cache::{read_cache, write_cache};
-use crate::config::Config;
 use crate::models::{Ecosystem, FreshnessInfo, ProvenanceInfo, VulnerabilityInfo};
 use anyhow::{Context, Result};
 use reqwest::Client;
@@ -56,10 +55,6 @@ impl SecurityChecker {
             client,
             nvd_api_key,
         }
-    }
-
-    pub fn from_config(config: &Config) -> Self {
-        Self::new_with_config(config.osv_timeout_secs(), config.nvd_api_key())
     }
 
     pub async fn check_vulnerability(

@@ -24,7 +24,6 @@ Cada projeto que usa o `tucupi` pode (e deve) colocar um arquivo `tucupi.toml` n
 | `freshness_threshold_days` | i64 | `7` | Dias após publicação para a release ser considerada "madura" (informativo). |
 | `block_too_fresh` | bool | `false` | Bloqueia upgrades para releases publicadas há menos de `very_recent_days` dias. |
 | `very_recent_days` | i64 | `3` | Janela de "fresh demais" usada pelo `block_too_fresh`. |
-| `nvd_api_key` | string | — | Chave da API do NVD — sobe o rate limit. Opcional; OSV.dev é a fonte primária. **Mantenha em `tucupi.local.toml` (gitignored), nunca no `tucupi.toml` compartilhado.** |
 | `pkgbuild_review` | bool | `true` | **Gate de revisão de código-fonte** para PKGBUILDs do AUR e formulae/casks do Homebrew: diff residual + scanner determinístico + veredito de LLM antes do upgrade. |
 | `review_model` | string | `"openai/gpt-5.6-luna"` | Modelo do opencode usado na triagem (qualquer id do `opencode models`). |
 | `review_llm` | bool | `true` | `false` = revisão roda só o scanner determinístico (sem chamadas de API; resultado inconclusivo exige revisão manual). |
@@ -61,20 +60,26 @@ review_model = "openai/gpt-5.6-luna"
 review_llm = true
 ```
 
-### Segredos (`tucupi.local.toml`)
+### 🔑 Segredos: chave do NVD no keychain do sistema
 
-O `tucupi.toml` é feito para ser commitado e compartilhado com o time. Segredos
-(chave do NVD, por exemplo) vão no `tucupi.local.toml`, ao lado do arquivo
-compartilhado — o tucupi aplica esse arquivo **por cima** do compartilhado e
-ele já vem listado no `.gitignore` deste repositório:
+O `tucupi.toml` é feito para ser commitado e compartilhado com o time — **nenhum
+segredo vai nele**. A chave da API do NVD (sobe o rate limit; o OSV.dev continua
+sendo a fonte primária) fica no keychain do sistema operacional (macOS Keychain,
+Secret Service no Linux, Credential Manager no Windows):
 
-```toml
-# tucupi.local.toml  (nunca commitar este arquivo)
-[security]
-nvd_api_key = "sua-chave-nvd"
+```bash
+tucupi config set-nvd-key     # prompt oculto; nada é ecoado
+tucupi config status          # mostra configurado/não configurado e a origem (nunca o valor)
+tucupi config remove-nvd-key  # remove a chave armazenada
 ```
 
-Ordem de carga: defaults → `tucupi.toml` → `tucupi.local.toml` (o último vence).
+Na TUI, `k` abre um campo mascarado para salvar a chave e `K` remove. Tanto a TUI
+quanto o modo batch resolvem a chave do keychain automaticamente a cada auditoria.
+
+A variável de ambiente `TUCUPI_NVD_API_KEY` existe apenas como fallback para CI e
+ambientes headless sem keychain — não é recomendada para uso local, pois variáveis
+de ambiente vazam com facilidade (histórico do shell, inspeção de processo, logs
+de CI).
 
 ---
 

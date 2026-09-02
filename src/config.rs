@@ -1,10 +1,8 @@
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::path::Path;
-use toml::Value;
 
-const SHARED_CONFIG_FILE: &str = "tucupi.toml";
-const LOCAL_CONFIG_FILE: &str = "tucupi.local.toml";
+const CONFIG_FILE: &str = "tucupi.toml";
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct SecurityConfig {
@@ -33,8 +31,6 @@ pub struct SecurityConfig {
     #[serde(default)]
     pub very_recent_days: Option<i64>,
     #[serde(default)]
-    pub nvd_api_key: Option<String>,
-    #[serde(default)]
     pub pkgbuild_review: Option<bool>,
     #[serde(default)]
     pub review_model: Option<String>,
@@ -50,17 +46,20 @@ pub struct Config {
 
 impl Config {
     pub async fn load_from_dir<P: AsRef<Path>>(dir: P) -> Self {
-        let dir = dir.as_ref();
-        let mut merged = load_config_table(&dir.join(SHARED_CONFIG_FILE)).await;
-        let local_overrides = load_config_table(&dir.join(LOCAL_CONFIG_FILE)).await;
-        merge_tables(&mut merged, local_overrides);
+        let config_path = dir.as_ref().join(CONFIG_FILE);
+        if !config_path.exists() {
+            return Self::default();
+        }
 
-        match Config::deserialize(merged) {
-            Ok(config) => config,
-            Err(err) => {
-                eprintln!("Warning: Failed to parse tucupi.toml: {}", err);
-                Self::default()
-            }
+        match tokio::fs::read_to_string(&config_path).await {
+            Ok(content) => match toml::from_str::<Config>(&content) {
+                Ok(config) => config,
+                Err(err) => {
+                    eprintln!("Warning: Failed to parse {}: {}", CONFIG_FILE, err);
+                    Self::default()
+                }
+            },
+            Err(_) => Self::default(),
         }
     }
 
@@ -120,10 +119,6 @@ impl Config {
         self.security.very_recent_days.unwrap_or(3)
     }
 
-    pub fn nvd_api_key(&self) -> Option<String> {
-        self.security.nvd_api_key.clone()
-    }
-
     pub fn pkgbuild_review(&self) -> bool {
         self.security.pkgbuild_review.unwrap_or(true)
     }
@@ -137,35 +132,6 @@ impl Config {
 
     pub fn review_llm(&self) -> bool {
         self.security.review_llm.unwrap_or(true)
-    }
-}
-
-async fn load_config_table(path: &Path) -> Value {
-    match tokio::fs::read_to_string(path).await {
-        Ok(content) => match toml::from_str::<Value>(&content) {
-            Ok(value) => value,
-            Err(err) => {
-                eprintln!("Warning: Failed to parse {}: {}", path.display(), err);
-                Value::Table(toml::map::Map::new())
-            }
-        },
-        Err(_) => Value::Table(toml::map::Map::new()),
-    }
-}
-
-fn merge_tables(base: &mut Value, overrides: Value) {
-    match (base, overrides) {
-        (Value::Table(base_table), Value::Table(override_table)) => {
-            for (key, value) in override_table {
-                match base_table.get_mut(&key) {
-                    Some(existing) => merge_tables(existing, value),
-                    None => {
-                        base_table.insert(key, value);
-                    }
-                }
-            }
-        }
-        (base, overrides) => *base = overrides,
     }
 }
 
@@ -228,69 +194,11 @@ mod tests {
         assert_eq!(config.very_recent_days(), 2);
     }
 
-    #[test]
-    fn merge_tables_overrides_nested_keys_and_preserves_base_only_keys() {
-        let mut base: Value = toml::from_str(
-            r#"
-            [security]
-            block_vulnerable = false
-            ignored_packages = ["left-pad"]
-        "#,
-        )
-        .unwrap();
-        let overrides: Value = toml::from_str(
-            r#"
-            [security]
-            block_vulnerable = true
-            nvd_api_key = "local-secret-key"
-        "#,
-        )
-        .unwrap();
-
-        merge_tables(&mut base, overrides);
-
-        let config = Config::deserialize(base).unwrap();
-        assert!(config.block_vulnerable());
-        assert_eq!(config.nvd_api_key().as_deref(), Some("local-secret-key"));
-        assert!(config.is_package_ignored("left-pad"));
-    }
-
     #[tokio::test]
-    async fn load_from_dir_overlays_local_config_over_shared_config() {
+    async fn load_from_dir_reads_shared_config_file() {
         let dir = tempfile::tempdir().unwrap();
         tokio::fs::write(
-            dir.path().join(SHARED_CONFIG_FILE),
-            r#"
-            [security]
-            block_vulnerable = false
-            ignored_packages = ["left-pad"]
-        "#,
-        )
-        .await
-        .unwrap();
-        tokio::fs::write(
-            dir.path().join(LOCAL_CONFIG_FILE),
-            r#"
-            [security]
-            block_vulnerable = true
-            nvd_api_key = "local-secret-key"
-        "#,
-        )
-        .await
-        .unwrap();
-
-        let config = Config::load_from_dir(dir.path()).await;
-
-        assert!(config.block_vulnerable());
-        assert_eq!(config.nvd_api_key().as_deref(), Some("local-secret-key"));
-        assert!(config.is_package_ignored("left-pad"));
-    }
-
-    #[tokio::test]
-    async fn load_from_dir_works_without_local_config_file() {
-        let dir = tempfile::tempdir().unwrap();
-        tokio::fs::write(
-            dir.path().join(SHARED_CONFIG_FILE),
+            dir.path().join(CONFIG_FILE),
             "[security]\nblock_vulnerable = true",
         )
         .await
@@ -299,7 +207,6 @@ mod tests {
         let config = Config::load_from_dir(dir.path()).await;
 
         assert!(config.block_vulnerable());
-        assert!(config.nvd_api_key().is_none());
     }
 
     #[tokio::test]
@@ -308,7 +215,6 @@ mod tests {
 
         let config = Config::load_from_dir(dir.path()).await;
 
-        assert_eq!(config.nvd_api_key(), None);
         assert!(!config.block_vulnerable());
     }
 }

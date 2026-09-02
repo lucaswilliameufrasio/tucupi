@@ -151,6 +151,9 @@ tucupi --interactive
 | `u` | Safe upgrade (with security audit) |
 | `f` | Force upgrade (bypass warnings) |
 | `c` | Check security only (no upgrade) |
+| `l` | Open upgrade logs popup |
+| `k` | Set NVD API key (masked input, stored in the system keychain) |
+| `K` | Remove the stored NVD API key |
 | `Esc` / `Enter` | Close modal dialogs |
 | `q` | Quit |
 
@@ -186,7 +189,6 @@ key below has a safe default.
 | `freshness_threshold_days` | i64 | `7` | Days after publication before a release is considered "mature" (informational). |
 | `block_too_fresh` | bool | `false` | Block upgrades to releases published less than `very_recent_days` ago. |
 | `very_recent_days` | i64 | `3` | The "too fresh" window used by `block_too_fresh`. |
-| `nvd_api_key` | string | none | NVD API key — raises NVD rate limits. Optional; OSV.dev is the primary source. **Keep it in `tucupi.local.toml` (gitignored), not in the shared `tucupi.toml`.** |
 | `pkgbuild_review` | bool | `true` | **Package source review gate** for AUR PKGBUILDs and Homebrew formulae/casks: residual diff + deterministic scan + LLM verdict before upgrade. |
 | `review_model` | string | `"openai/gpt-5.6-luna"` | opencode model used by the source review triage (any id from `opencode models`). |
 | `review_llm` | bool | `true` | `false` = source review runs deterministic scan only (no API calls; inconclusive results require manual review). |
@@ -217,19 +219,27 @@ review_model = "openai/gpt-5.6-luna"
 review_llm = true
 ```
 
-### Local overrides & secrets (`tucupi.local.toml`)
+### 🔑 Secrets: NVD API key in the system keychain
 
-`tucupi.toml` is meant to be committed and shared with your team. Anything
-secret belongs in a `tucupi.local.toml` next to it — tucupi overlays it on top
-of the shared file, and it is already listed in this repository's `.gitignore`:
+The NVD API key (raises NVD rate limits; OSV.dev remains the primary source) is
+**never stored in `tucupi.toml`** — that file is meant to be committed and
+shared. Secrets live in the OS keychain (macOS Keychain, Linux Secret Service,
+Windows Credential Manager):
 
-```toml
-# tucupi.local.toml  (never commit this file)
-[security]
-nvd_api_key = "your-nvd-key"
+```bash
+tucupi config set-nvd-key     # hidden prompt; nothing is echoed
+tucupi config status          # shows configured/not configured and the source (never the value)
+tucupi config remove-nvd-key  # removes the stored key
 ```
 
-Load order: defaults → `tucupi.toml` → `tucupi.local.toml` (last one wins).
+Inside the TUI, `k` opens a masked input to save the key and `K` removes it.
+Both the TUI and the batch mode resolve the key from the keychain automatically
+on every audit.
+
+The `TUCUPI_NVD_API_KEY` environment variable exists only as a fallback for CI
+and headless environments where no keychain is available — it is not recommended
+for local use, since environment variables leak easily (shell history, process
+inspection, CI logs).
 
 ## 🔧 Development
 

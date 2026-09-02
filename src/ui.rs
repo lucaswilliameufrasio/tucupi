@@ -532,6 +532,26 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
             f.render_widget(paragraph, area);
         }
+        Modal::SecretInput { buffer } => {
+            let area = centered_rect(50, 20, size);
+            f.render_widget(Clear, area);
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .title(t("secret_input_title"))
+                .border_style(Style::default().fg(Color::Yellow));
+
+            let masked = crate::secrets::mask_secret(buffer);
+            let text = format!("{}_\n\n{}", masked, t("secret_input_help"));
+
+            let paragraph = Paragraph::new(text)
+                .block(block)
+                .style(Style::default().fg(Color::White))
+                .wrap(Wrap { trim: true });
+
+            f.render_widget(paragraph, area);
+        }
         Modal::None => {}
     }
 
