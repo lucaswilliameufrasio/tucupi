@@ -1,9 +1,10 @@
-use crate::app::{App, AppStatus, Modal, Tab};
+use crate::app::{App, AppStatus, Modal, Tab, ToastKind};
 use crate::i18n::{t, tf};
 use crate::models::{Ecosystem, FreshnessInfo, VulnerabilityInfo};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
     Frame,
 };
@@ -47,6 +48,8 @@ fn severity_label(severity: Option<&str>) -> String {
     }
 }
 
+const NARROW_LAYOUT_THRESHOLD: u16 = 100;
+
 pub fn render(f: &mut Frame, app: &mut App) {
     let size = f.area();
 
@@ -60,6 +63,19 @@ pub fn render(f: &mut Frame, app: &mut App) {
             Constraint::Length(1),
         ])
         .split(size);
+
+    // Responsive: side-by-side on wide terminals, stacked when narrow.
+    let body_chunks = if size.width >= NARROW_LAYOUT_THRESHOLD {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(chunks[2])
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(chunks[2])
+    };
 
     let title = Paragraph::new(t("title")).style(
         Style::default()
@@ -127,11 +143,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
                 .bg(Color::Rgb(15, 23, 42)),
         );
     f.render_widget(dir, tab_chunks[1]);
-
-    let body_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(chunks[2]);
 
     let deps = app.current_deps().clone();
     let header_cells = vec![
@@ -225,7 +236,6 @@ pub fn render(f: &mut Frame, app: &mut App) {
         .border_type(BorderType::Rounded)
         .title(t("detail_title"))
         .border_style(Style::default().fg(Color::Cyan));
-
     if let Some(dep) = app.selected_dep() {
         let cache_key = format!(
             "{}_{}_{}",
@@ -399,6 +409,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
         let vuln_widget = Paragraph::new(vuln_section)
             .style(vuln_style)
             .wrap(Wrap { trim: true });
+        let detail_view_height = detail_chunks[2].height as usize;
+        let detail_content_height = vuln_widget
+            .line_count(detail_chunks[2].width.max(1))
+            .max(detail_view_height);
+        let detail_max_scroll = detail_content_height.saturating_sub(detail_view_height);
+        let detail_offset = app.detail_scroll.min(detail_max_scroll as u16);
+        let vuln_widget = vuln_widget.scroll((detail_offset, 0));
         f.render_widget(vuln_widget, detail_chunks[2]);
     } else {
         let no_selection =
@@ -413,21 +430,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
             .fg(Color::Yellow)
             .bg(Color::Rgb(30, 41, 59)),
         AppStatus::Upgrading(_) => Style::default().fg(Color::Cyan).bg(Color::Rgb(30, 41, 59)),
-        AppStatus::UpgradeSuccess(_) => {
-            Style::default().fg(Color::Green).bg(Color::Rgb(30, 41, 59))
-        }
-        AppStatus::UpgradeFailed(_, _) => {
-            Style::default().fg(Color::Red).bg(Color::Rgb(30, 41, 59))
-        }
-        AppStatus::Ready => Style::default().fg(Color::Gray).bg(Color::Rgb(15, 23, 42)),
+        _ => Style::default().fg(Color::Gray).bg(Color::Rgb(15, 23, 42)),
     };
 
     let status_text = match &app.status {
         AppStatus::Scanning => t("status_scanning").to_string(),
         AppStatus::Upgrading(msg) => tf("status_upgrading", &[msg]),
-        AppStatus::UpgradeSuccess(pkg) => tf("status_success", &[pkg]),
-        AppStatus::UpgradeFailed(pkg, err) => tf("status_failed", &[pkg, err]),
-        AppStatus::Ready => t("status_ready").to_string(),
+        _ => t("status_ready").to_string(),
     };
 
     let status_widget = Paragraph::new(status_text).style(status_style);
@@ -524,6 +533,143 @@ pub fn render(f: &mut Frame, app: &mut App) {
             f.render_widget(paragraph, area);
         }
         Modal::None => {}
+    }
+
+    if app.log_popup_open {
+        let tab_names: Vec<String> = app
+            .upgrade_logs
+            .iter()
+            .map(|log| log.name.clone())
+            .collect();
+        let active_lines: &[String] = app
+            .upgrade_logs
+            .get(app.log_popup_tab)
+            .map_or(&[], |log| log.lines.as_slice());
+        render_log_popup(
+            f,
+            size,
+            &tab_names,
+            app.log_popup_tab,
+            active_lines,
+            app.log_popup_scroll_back,
+        );
+    }
+
+    render_toasts(f, app, size);
+}
+
+pub fn render_log_popup(
+    f: &mut Frame,
+    area: Rect,
+    tab_names: &[String],
+    active_tab: usize,
+    lines: &[String],
+    scroll_back: usize,
+) {
+    let popup_area = centered_rect(80, 70, area);
+    f.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(t("logs_title"))
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    let mut tab_spans: Vec<Span> = Vec::new();
+    if tab_names.is_empty() {
+        tab_spans.push(Span::styled(
+            t("logs_empty"),
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else {
+        for (index, name) in tab_names.iter().enumerate() {
+            let tab_style = if index == active_tab {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            tab_spans.push(Span::styled(format!(" {} ", name), tab_style));
+            if index + 1 < tab_names.len() {
+                tab_spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+            }
+        }
+    }
+    f.render_widget(Paragraph::new(Line::from(tab_spans)), rows[0]);
+
+    let view_height = rows[1].height as usize;
+    let log_lines: Vec<Line> = lines.iter().map(|line| Line::from(line.clone())).collect();
+    let logs_paragraph = Paragraph::new(log_lines)
+        .style(Style::default().fg(Color::Gray))
+        .wrap(Wrap { trim: false });
+    let content_height = logs_paragraph
+        .line_count(rows[1].width.max(1))
+        .max(view_height);
+    let bottom_offset = content_height.saturating_sub(view_height);
+    let scroll_offset = bottom_offset.saturating_sub(scroll_back);
+    let logs_paragraph = logs_paragraph.scroll((scroll_offset as u16, 0));
+    f.render_widget(logs_paragraph, rows[1]);
+
+    let help =
+        Paragraph::new(t("logs_help")).style(Style::default().fg(Color::Black).bg(Color::Cyan));
+    f.render_widget(help, rows[2]);
+}
+
+fn render_toasts(f: &mut Frame, app: &App, area: Rect) {
+    let visible_toasts: Vec<&crate::app::Toast> = app.toasts.iter().rev().take(4).collect();
+    let mut next_y = area.y.saturating_add(1);
+
+    for toast in visible_toasts {
+        let max_width = area.width.saturating_sub(4).clamp(24, 64);
+        let text_width = toast.message.chars().count() as u16;
+        let width = (text_width + 4)
+            .clamp(24, max_width)
+            .min(area.width.saturating_sub(2).max(10));
+        let inner_width = width.saturating_sub(2).max(1);
+        let paragraph = Paragraph::new(toast.message.clone()).wrap(Wrap { trim: false });
+        let text_lines = paragraph.line_count(inner_width).max(1) as u16;
+        let height = text_lines.saturating_add(2);
+
+        if next_y.saturating_add(height) > area.height {
+            break;
+        }
+
+        let x = area.width.saturating_sub(width.saturating_add(1));
+        let toast_area = Rect::new(x, next_y, width, height);
+        let border_color = match toast.kind {
+            ToastKind::Success => Color::Green,
+            ToastKind::Error => Color::Red,
+            ToastKind::Info => Color::Cyan,
+        };
+
+        f.render_widget(Clear, toast_area);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(
+                Style::default()
+                    .fg(border_color)
+                    .add_modifier(Modifier::BOLD),
+            );
+        let paragraph = paragraph
+            .block(block)
+            .style(Style::default().fg(Color::White));
+        f.render_widget(paragraph, toast_area);
+
+        next_y = next_y.saturating_add(height);
     }
 }
 

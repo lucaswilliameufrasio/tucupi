@@ -4,12 +4,12 @@ version = "0.2.1"
 edition = "2021"
 authors = ["Lucas Eufrasio <lucaseufrasio@gmail.com>"]
 description = "A concurrent dependency checker and upgrader with built-in security auditing."
-repository = "https://github.com/lucaseufrasio/tucupi"
+repository = "https://github.com/lucaswilliameufrasio/tucupi"
 license = "MIT"
 default-run = "tucupi"
 
 [dependencies]
-ratatui = "0.30.1"
+ratatui = { version = "0.30.1", features = ["unstable-rendered-line-info"] }
 crossterm = "0.29.0"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "process", "fs", "io-util"] }
 serde = { version = "1.0.228", features = ["derive"] }

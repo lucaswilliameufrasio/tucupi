@@ -1,5 +1,7 @@
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -63,14 +65,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
         original_hook(panic_info);
     }));
 
     // 3. Initialize Terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -87,60 +89,104 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Ok(event) = app.event_rx.try_recv() {
             app.handle_event(event);
         }
+        app.expire_toasts();
 
         // Poll UI events (50ms timeout)
         if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match &app.modal {
-                        Modal::ConfirmForce(_, _) => match key.code {
-                            KeyCode::Enter => {
-                                app.trigger_upgrade_selected(true);
-                            }
-                            KeyCode::Esc => {
-                                app.modal = Modal::None;
-                            }
-                            _ => {}
-                        },
-                        Modal::Blocked(_, _) => match key.code {
-                            KeyCode::Enter | KeyCode::Esc => {
-                                app.modal = Modal::None;
-                            }
-                            _ => {}
-                        },
-                        Modal::BlockedPolicy(_, _) => match key.code {
-                            KeyCode::Enter | KeyCode::Esc => {
-                                app.modal = Modal::None;
-                            }
-                            _ => {}
-                        },
-                        Modal::ConfirmGlobal(_, _) => match key.code {
-                            KeyCode::Enter => app.confirm_global_upgrade(),
-                            KeyCode::Esc => {
-                                app.modal = Modal::None;
-                            }
-                            _ => {}
-                        },
-                        Modal::None => match key.code {
+            let area = terminal.size()?;
+            let detail_start_column = area.width * 55 / 100;
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    if app.log_popup_open {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('l') => app.close_log_popup(),
+                            KeyCode::Left => app.log_popup_prev_tab(),
+                            KeyCode::Right => app.log_popup_next_tab(),
+                            KeyCode::Up => app.log_popup_scroll_up(),
+                            KeyCode::Down => app.log_popup_scroll_down(),
                             KeyCode::Char('q') => break,
-                            KeyCode::Up => app.scroll_up(),
-                            KeyCode::Down => app.scroll_down(),
-                            KeyCode::Tab => app.switch_tab(),
-                            KeyCode::Char('r') => app.trigger_scan(),
-                            KeyCode::Char('u') => app.trigger_upgrade_selected(false),
-                            KeyCode::Char('f') => app.trigger_upgrade_selected(true),
-                            KeyCode::Char('c') => app.check_security_selected(),
                             _ => {}
-                        },
+                        }
+                    } else {
+                        match &app.modal {
+                            Modal::ConfirmForce(_, _) => match key.code {
+                                KeyCode::Enter => {
+                                    app.trigger_upgrade_selected(true);
+                                }
+                                KeyCode::Esc => {
+                                    app.modal = Modal::None;
+                                }
+                                _ => {}
+                            },
+                            Modal::Blocked(_, _) => match key.code {
+                                KeyCode::Enter | KeyCode::Esc => {
+                                    app.modal = Modal::None;
+                                }
+                                _ => {}
+                            },
+                            Modal::BlockedPolicy(_, _) => match key.code {
+                                KeyCode::Enter | KeyCode::Esc => {
+                                    app.modal = Modal::None;
+                                }
+                                _ => {}
+                            },
+                            Modal::ConfirmGlobal(_, _) => match key.code {
+                                KeyCode::Enter => app.confirm_global_upgrade(),
+                                KeyCode::Esc => {
+                                    app.modal = Modal::None;
+                                }
+                                _ => {}
+                            },
+                            Modal::None => match key.code {
+                                KeyCode::Char('q') => break,
+                                KeyCode::Up => app.scroll_up(),
+                                KeyCode::Down => app.scroll_down(),
+                                KeyCode::PageUp => app.detail_scroll_up(),
+                                KeyCode::PageDown => app.detail_scroll_down(),
+                                KeyCode::Tab => app.switch_tab(),
+                                KeyCode::Char('r') => app.trigger_scan(),
+                                KeyCode::Char('u') => app.trigger_upgrade_selected(false),
+                                KeyCode::Char('f') => app.trigger_upgrade_selected(true),
+                                KeyCode::Char('c') => app.check_security_selected(),
+                                KeyCode::Char('l') => app.open_log_popup(),
+                                _ => {}
+                            },
+                        }
                     }
                 }
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        if app.log_popup_open {
+                            app.log_popup_scroll_up();
+                        } else if mouse.column >= detail_start_column {
+                            app.detail_scroll_up();
+                        } else {
+                            app.scroll_up();
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if app.log_popup_open {
+                            app.log_popup_scroll_down();
+                        } else if mouse.column >= detail_start_column {
+                            app.detail_scroll_down();
+                        } else {
+                            app.scroll_down();
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
             }
         }
     }
 
     // 6. Restore Terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     Ok(())

@@ -10,6 +10,8 @@ use ratatui::widgets::TableState;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::{Duration, Instant};
+use tokio::io::AsyncBufReadExt;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +38,26 @@ pub enum Modal {
     ConfirmGlobal(Dependency, String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastKind {
+    Info,
+    Success,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub struct Toast {
+    pub kind: ToastKind,
+    pub message: String,
+    pub expires_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub struct DependencyLog {
+    pub name: String,
+    pub lines: Vec<String>,
+}
+
 pub enum AppEvent {
     ScanFinished(Tab, Vec<Dependency>),
     SecurityChecked(Dependency, Result<Vec<VulnerabilityInfo>, String>, bool),
@@ -43,6 +65,7 @@ pub enum AppEvent {
     ProvenanceChecked(Dependency, ProvenanceInfo),
     ReviewChecked(Dependency, ReviewReport, bool, bool),
     UpgradeFinished(Result<(), String>),
+    UpgradeLog(String, String),
 }
 
 pub struct App {
@@ -61,6 +84,12 @@ pub struct App {
     pub provenance_cache: HashMap<String, ProvenanceInfo>,
     pub security_check_only: bool,
     pub batch_scan_pending: usize,
+    pub toasts: Vec<Toast>,
+    pub upgrade_logs: Vec<DependencyLog>,
+    pub log_popup_open: bool,
+    pub log_popup_tab: usize,
+    pub log_popup_scroll_back: usize,
+    pub detail_scroll: u16,
 
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
     pub event_rx: mpsc::UnboundedReceiver<AppEvent>,
@@ -90,6 +119,12 @@ impl App {
             provenance_cache: HashMap::new(),
             security_check_only: false,
             batch_scan_pending: 0,
+            toasts: Vec::new(),
+            upgrade_logs: Vec::new(),
+            log_popup_open: false,
+            log_popup_tab: 0,
+            log_popup_scroll_back: 0,
+            detail_scroll: 0,
             event_tx,
             event_rx,
         }
@@ -121,6 +156,7 @@ impl App {
         let current = self.table_state.selected().unwrap_or(0);
         let next = (current + 1).min(len.saturating_sub(1));
         self.table_state.select(Some(next));
+        self.detail_scroll = 0;
     }
 
     pub fn scroll_up(&mut self) {
@@ -132,6 +168,15 @@ impl App {
         let current = self.table_state.selected().unwrap_or(0);
         let prev = current.saturating_sub(1);
         self.table_state.select(Some(prev));
+        self.detail_scroll = 0;
+    }
+
+    pub fn detail_scroll_up(&mut self) {
+        self.detail_scroll = self.detail_scroll.saturating_add(1);
+    }
+
+    pub fn detail_scroll_down(&mut self) {
+        self.detail_scroll = self.detail_scroll.saturating_sub(1);
     }
 
     pub fn switch_tab(&mut self) {
@@ -144,6 +189,84 @@ impl App {
         } else {
             Some(0)
         });
+        self.detail_scroll = 0;
+    }
+
+    pub fn push_toast(&mut self, kind: ToastKind, message: String) {
+        let ttl = match kind {
+            ToastKind::Error => Duration::from_secs(12),
+            ToastKind::Info | ToastKind::Success => Duration::from_secs(6),
+        };
+        self.toasts.push(Toast {
+            kind,
+            message,
+            expires_at: Instant::now() + ttl,
+        });
+        if self.toasts.len() > 6 {
+            self.toasts.remove(0);
+        }
+    }
+
+    pub fn expire_toasts(&mut self) {
+        let now = Instant::now();
+        self.toasts.retain(|toast| toast.expires_at > now);
+    }
+
+    pub fn open_log_popup(&mut self) {
+        if self.upgrade_logs.is_empty() {
+            return;
+        }
+        self.log_popup_open = true;
+        self.log_popup_tab = self.log_popup_tab.min(self.upgrade_logs.len() - 1);
+        self.log_popup_scroll_back = 0;
+    }
+
+    pub fn close_log_popup(&mut self) {
+        self.log_popup_open = false;
+    }
+
+    pub fn log_popup_next_tab(&mut self) {
+        if self.upgrade_logs.is_empty() {
+            return;
+        }
+        self.log_popup_tab = (self.log_popup_tab + 1) % self.upgrade_logs.len();
+        self.log_popup_scroll_back = 0;
+    }
+
+    pub fn log_popup_prev_tab(&mut self) {
+        if self.upgrade_logs.is_empty() {
+            return;
+        }
+        self.log_popup_tab =
+            (self.log_popup_tab + self.upgrade_logs.len() - 1) % self.upgrade_logs.len();
+        self.log_popup_scroll_back = 0;
+    }
+
+    pub fn log_popup_scroll_up(&mut self) {
+        self.log_popup_scroll_back = self.log_popup_scroll_back.saturating_add(1);
+    }
+
+    pub fn log_popup_scroll_down(&mut self) {
+        self.log_popup_scroll_back = self.log_popup_scroll_back.saturating_sub(1);
+    }
+
+    fn append_upgrade_log(&mut self, name: &str, line: String) {
+        if let Some(log) = self.upgrade_logs.iter_mut().find(|log| log.name == name) {
+            log.lines.push(line);
+        } else {
+            self.upgrade_logs.push(DependencyLog {
+                name: name.to_string(),
+                lines: vec![line],
+            });
+            self.log_popup_tab = self.upgrade_logs.len() - 1;
+            self.log_popup_scroll_back = 0;
+        }
+    }
+
+    fn clear_upgrade_log(&mut self, name: &str) {
+        if let Some(log) = self.upgrade_logs.iter_mut().find(|log| log.name == name) {
+            log.lines.clear();
+        }
     }
 
     pub fn trigger_scan(&mut self) {
@@ -329,6 +452,10 @@ impl App {
                         dep.name.clone(),
                         format!("Security check failed: {}", err_msg),
                     );
+                    self.push_toast(
+                        ToastKind::Error,
+                        tf("toast_security_check_failed", &[&dep.name]),
+                    );
                 }
             }
             return;
@@ -455,12 +582,17 @@ impl App {
                 if self.config.require_online() {
                     self.block_with_policy_message(dep, tf("blocked_online_required", &[&err_msg]));
                 } else if self.config.block_vulnerable() {
+                    let package_name = dep.name.clone();
                     self.status = AppStatus::UpgradeFailed(
-                        dep.name.clone(),
+                        package_name.clone(),
                         format!(
                             "Security check failed: {}. Upgrade BLOCKED by repository configuration.",
                             err_msg
                         ),
+                    );
+                    self.push_toast(
+                        ToastKind::Error,
+                        tf("toast_security_check_failed", &[&package_name]),
                     );
                 } else {
                     self.modal = Modal::ConfirmForce(
@@ -623,15 +755,33 @@ impl App {
 
     fn start_upgrade_confirmed(&mut self, dep: Dependency) {
         let is_cargo_local = !dep.is_global && dep.ecosystem == Ecosystem::Cargo;
-        let pipe_upgrade = !dep.is_global;
         self.status = AppStatus::Upgrading(format!(
             "Upgrading {} to {}...",
             dep.name, dep.latest_version
         ));
+        self.clear_upgrade_log(&dep.name);
+        self.log_popup_open = true;
+        if let Some(position) = self
+            .upgrade_logs
+            .iter()
+            .position(|log| log.name == dep.name)
+        {
+            self.log_popup_tab = position;
+        }
+        self.log_popup_scroll_back = 0;
         let tx = self.event_tx.clone();
         let target_dir = self.target_dir.clone();
         let dep_name = dep.name.clone();
         let dep_for_backup = dep.clone();
+
+        let (line_tx, mut line_rx) = mpsc::unbounded_channel::<String>();
+        let log_event_tx = self.event_tx.clone();
+        let log_dep_name = dep.name.clone();
+        tokio::spawn(async move {
+            while let Some(line) = line_rx.recv().await {
+                let _ = log_event_tx.send(AppEvent::UpgradeLog(log_dep_name.clone(), line));
+            }
+        });
 
         tokio::spawn(async move {
             let backup = if dep_for_backup.is_global {
@@ -650,12 +800,13 @@ impl App {
             };
 
             let (cmd, args) = get_upgrade_cmd(&dep, &target_dir);
-            let mut result = run_upgrade_process(&cmd, args, &target_dir, pipe_upgrade).await;
+            let mut result =
+                run_upgrade_process(&cmd, args, &target_dir, Some(line_tx.clone())).await;
 
             if result.is_ok() && is_cargo_local {
                 let update_args = vec!["update".to_string(), "-p".to_string(), dep_name.clone()];
                 let fetch_result =
-                    run_upgrade_process("cargo", update_args, &target_dir, true).await;
+                    run_upgrade_process("cargo", update_args, &target_dir, Some(line_tx)).await;
                 if let Err(e) = fetch_result {
                     result = Err(e
                         .lines()
@@ -703,6 +854,7 @@ impl App {
                     } else {
                         Some(0)
                     });
+                    self.detail_scroll = 0;
                     self.trigger_batch_security_scan();
                 }
             }
@@ -730,6 +882,9 @@ impl App {
             AppEvent::ReviewChecked(dep, report, force, audit_only) => {
                 self.process_review_result(dep, report, force, audit_only);
             }
+            AppEvent::UpgradeLog(name, line) => {
+                self.append_upgrade_log(&name, line);
+            }
             AppEvent::UpgradeFinished(res) => match res {
                 Ok(_) => {
                     let name = match self.status {
@@ -740,6 +895,7 @@ impl App {
                             .to_string(),
                         _ => "dependency".to_string(),
                     };
+                    self.push_toast(ToastKind::Success, tf("toast_upgrade_success", &[&name]));
                     self.status = AppStatus::UpgradeSuccess(name);
                     self.trigger_scan();
                 }
@@ -752,6 +908,7 @@ impl App {
                             .to_string(),
                         _ => "dependency".to_string(),
                     };
+                    self.push_toast(ToastKind::Error, tf("toast_upgrade_failed", &[&name]));
                     self.status = AppStatus::UpgradeFailed(name, err_msg);
                 }
             },
@@ -824,8 +981,9 @@ pub(crate) fn get_upgrade_cmd(dep: &Dependency, target_dir: &Path) -> (String, V
             Ecosystem::Mise => (
                 "mise".to_string(),
                 vec![
-                    "install".to_string(),
-                    format!("{}@{}", dep.name, clean_version),
+                    "upgrade".to_string(),
+                    "--bump".to_string(),
+                    dep.name.clone(),
                 ],
             ),
             Ecosystem::Homebrew => (
@@ -943,11 +1101,31 @@ fn suggest_fix(stderr: &str) -> String {
     }
 }
 
+const UPGRADE_TIMEOUT_SECS: u64 = 120;
+
+async fn collect_stream_lines<R>(
+    reader: R,
+    log_tx: Option<mpsc::UnboundedSender<String>>,
+) -> Vec<String>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut lines = tokio::io::BufReader::new(reader).lines();
+    let mut collected = Vec::new();
+    while let Ok(Some(line)) = lines.next_line().await {
+        if let Some(tx) = &log_tx {
+            let _ = tx.send(line.clone());
+        }
+        collected.push(line);
+    }
+    collected
+}
+
 pub(crate) async fn run_upgrade_process(
     cmd: &str,
     args: Vec<String>,
     dir: &Path,
-    pipe: bool,
+    log_tx: Option<mpsc::UnboundedSender<String>>,
 ) -> Result<(), String> {
     // Commands that require root must never spawn an interactive sudo prompt
     // inside the TUI/batch runner: the password prompt cannot be answered
@@ -973,78 +1151,68 @@ pub(crate) async fn run_upgrade_process(
         }
     }
 
-    if !pipe {
-        let mut child = tokio::process::Command::new(cmd)
-            .args(&args)
-            .current_dir(dir)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|e| format!("Failed to start process: {}", e))?;
+    let mut child = tokio::process::Command::new(cmd)
+        .args(&args)
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start process: {}", e))?;
 
-        let status = tokio::time::timeout(std::time::Duration::from_secs(120), child.wait())
-            .await
-            .map_err(|_| "Process timed out after 120 seconds.".to_string())?
-            .map_err(|e| format!("Failed to wait for process: {}", e))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture process stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture process stderr".to_string())?;
+    let stdout_reader = tokio::spawn(collect_stream_lines(stdout, log_tx.clone()));
+    let stderr_reader = tokio::spawn(collect_stream_lines(stderr, log_tx));
 
-        if status.success() {
-            return Ok(());
+    let wait_result =
+        tokio::time::timeout(Duration::from_secs(UPGRADE_TIMEOUT_SECS), child.wait()).await;
+
+    let status = match wait_result {
+        Ok(wait_status) => wait_status.map_err(|e| format!("Failed to wait for process: {}", e))?,
+        Err(_elapsed) => {
+            let _ = child.kill().await;
+            let _ = stdout_reader.await;
+            let _ = stderr_reader.await;
+            return Err("Process timed out after 120 seconds.".to_string());
         }
-        let exit_code = status
-            .code()
-            .map_or("unknown".to_string(), |c| c.to_string());
-        return Err(format!("Process failed with exit code {}", exit_code));
-    }
-
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(120),
-        tokio::process::Command::new(cmd)
-            .args(&args)
-            .current_dir(dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output(),
-    )
-    .await;
-
-    let output = match output {
-        Ok(out) => out,
-        Err(_timeout) => return Err("Process timed out after 120 seconds.".to_string()),
     };
 
-    match output {
-        Ok(out) => {
-            if out.status.success() {
-                Ok(())
-            } else {
-                let exit_code = out
-                    .status
-                    .code()
-                    .map_or("unknown".to_string(), |code| code.to_string());
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                let error_lines: Vec<&str> = stderr
-                    .lines()
-                    .map(|line| line.trim())
-                    .filter(|line| !line.is_empty())
-                    .collect();
-                let last_error = error_lines
-                    .iter()
-                    .rev()
-                    .take(3)
-                    .rev()
-                    .cloned()
-                    .collect::<Vec<&str>>()
-                    .join("; ");
-                let command_line = format!("{} {}", cmd, args.join(" "));
-                let hint = suggest_fix(&stderr);
-                Err(format!(
-                    "Comando: {}\n\nSaída: {} (exit: {})\n\n{}",
-                    command_line, last_error, exit_code, hint
-                ))
-            }
-        }
-        Err(e) => Err(format!("Failed to start process: {}", e)),
+    let _ = stdout_reader.await;
+    let stderr_lines = stderr_reader.await.unwrap_or_default();
+
+    if status.success() {
+        return Ok(());
     }
+
+    let exit_code = status
+        .code()
+        .map_or("unknown".to_string(), |code| code.to_string());
+    let stderr_text = stderr_lines.join("\n");
+    let error_lines: Vec<&str> = stderr_text
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect();
+    let last_error = error_lines
+        .iter()
+        .rev()
+        .take(3)
+        .rev()
+        .cloned()
+        .collect::<Vec<&str>>()
+        .join("; ");
+    let command_line = format!("{} {}", cmd, args.join(" "));
+    let hint = suggest_fix(&stderr_text);
+    Err(format!(
+        "Comando: {}\n\nSaída: {} (exit: {})\n\n{}",
+        command_line, last_error, exit_code, hint
+    ))
 }
 
 fn cache_key(dep: &Dependency) -> String {
@@ -1079,5 +1247,57 @@ fn review_to_vuln_info(report: &ReviewReport) -> VulnerabilityInfo {
         severity: Some("review".to_string()),
         score: None,
         sources: vec!["review".to_string()],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn run_upgrade_process_streams_output_lines_to_log_channel() {
+        let (line_tx, mut line_rx) = mpsc::unbounded_channel();
+
+        let result = run_upgrade_process(
+            "echo",
+            vec!["hello".to_string()],
+            Path::new("."),
+            Some(line_tx),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let mut lines = Vec::new();
+        while let Ok(line) = line_rx.try_recv() {
+            lines.push(line);
+        }
+        assert_eq!(lines, vec!["hello".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn run_upgrade_process_captures_stderr_on_failure() {
+        let (line_tx, mut line_rx) = mpsc::unbounded_channel();
+
+        let result = run_upgrade_process(
+            "sh",
+            vec!["-c".to_string(), "echo boom >&2; exit 1".to_string()],
+            Path::new("."),
+            Some(line_tx),
+        )
+        .await;
+
+        assert!(result.is_err());
+        let mut lines = Vec::new();
+        while let Ok(line) = line_rx.try_recv() {
+            lines.push(line);
+        }
+        assert!(lines.contains(&"boom".to_string()));
+    }
+
+    #[tokio::test]
+    async fn run_upgrade_process_works_without_log_channel() {
+        let result = run_upgrade_process("true", vec![], Path::new("."), None).await;
+
+        assert!(result.is_ok());
     }
 }

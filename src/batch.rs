@@ -8,12 +8,15 @@ use crate::models::{
 use crate::review::{ReviewReport, ReviewVerdict};
 use crate::rollback::{commit_backup, prepare_local_backup, restore_backup};
 use crate::security::{check_provenance, SecurityChecker};
+use crate::ui;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -49,6 +52,7 @@ struct BatchItem {
     selection: SelectionState,
     vulns: Option<Vec<VulnerabilityInfo>>,
     outcome: ItemOutcome,
+    logs: Vec<String>,
 }
 
 enum BatchScreen {
@@ -84,6 +88,7 @@ enum BatchEvent {
     SecurityChecked(usize, BatchSecurityResult),
     ReviewChecked(usize, ReviewReport),
     UpgradeFinished(usize, Result<(), String>),
+    UpgradeLog(usize, String),
 }
 
 pub async fn run(
@@ -93,13 +98,13 @@ pub async fn run(
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = disable_raw_mode();
-        let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(std::io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
         original_hook(panic_info);
     }));
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -120,9 +125,39 @@ pub async fn run(
     });
 
     let mut running = true;
+    let mut logs_popup_open = false;
+    let mut logs_popup_tab = 0usize;
+    let mut logs_popup_scroll_back = 0usize;
+
     while running {
+        if logs_popup_open && log_tab_indices(&screen).is_empty() {
+            logs_popup_open = false;
+        }
+        let tab_count = log_tab_indices(&screen).len();
+        if tab_count > 0 {
+            logs_popup_tab = logs_popup_tab.min(tab_count - 1);
+        }
+
         terminal.draw(|frame| {
+            let terminal_area = frame.area();
             render_batch(frame, &screen);
+            if logs_popup_open {
+                let tab_indices = log_tab_indices(&screen);
+                let tab_names: Vec<String> = tab_indices
+                    .iter()
+                    .map(|&index| batch_item_name(&screen, index))
+                    .collect();
+                let active_item_index = tab_indices[logs_popup_tab];
+                let active_lines = batch_item_logs(&screen, active_item_index);
+                ui::render_log_popup(
+                    frame,
+                    terminal_area,
+                    &tab_names,
+                    logs_popup_tab,
+                    active_lines,
+                    logs_popup_scroll_back,
+                );
+            }
         })?;
 
         if let Ok(batch_event) = event_rx.try_recv() {
@@ -135,6 +170,7 @@ pub async fn run(
                             selection: SelectionState::None,
                             vulns: None,
                             outcome: ItemOutcome::Pending,
+                            logs: Vec::new(),
                         })
                         .collect();
                     screen = BatchScreen::Select {
@@ -181,30 +217,99 @@ pub async fn run(
                         }
                     }
                 }
+                BatchEvent::UpgradeLog(index, line) => {
+                    let mut is_first_line = false;
+                    match &mut screen {
+                        BatchScreen::Executing { items, .. } | BatchScreen::Report { items } => {
+                            is_first_line = items[index].logs.is_empty();
+                            items[index].logs.push(line);
+                        }
+                        _ => {}
+                    }
+                    if is_first_line && logs_popup_open {
+                        let tab_indices = log_tab_indices(&screen);
+                        if let Some(position) = tab_indices
+                            .iter()
+                            .position(|&item_index| item_index == index)
+                        {
+                            logs_popup_tab = position;
+                            logs_popup_scroll_back = 0;
+                        }
+                    }
+                }
             }
         }
 
         if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
                     let key_code = key.code;
-                    let previous_screen = std::mem::replace(&mut screen, BatchScreen::Scanning);
-                    screen = handle_key_input(
-                        previous_screen,
-                        key_code,
-                        &event_tx,
-                        &config,
-                        &target_dir,
-                        include_global,
-                        &mut running,
-                    );
+                    if logs_popup_open {
+                        match key_code {
+                            KeyCode::Esc | KeyCode::Char('l') => logs_popup_open = false,
+                            KeyCode::Left => {
+                                logs_popup_tab = logs_popup_tab.saturating_sub(1);
+                                logs_popup_scroll_back = 0;
+                            }
+                            KeyCode::Right => {
+                                let popup_tab_count = log_tab_indices(&screen).len();
+                                if popup_tab_count > 0 {
+                                    logs_popup_tab = (logs_popup_tab + 1) % popup_tab_count;
+                                }
+                                logs_popup_scroll_back = 0;
+                            }
+                            KeyCode::Up => logs_popup_scroll_back += 1,
+                            KeyCode::Down => {
+                                logs_popup_scroll_back = logs_popup_scroll_back.saturating_sub(1)
+                            }
+                            KeyCode::Char('q') => running = false,
+                            _ => {}
+                        }
+                    } else {
+                        let opens_popup = matches!(
+                            screen,
+                            BatchScreen::Executing { .. } | BatchScreen::Report { .. }
+                        ) && key_code == KeyCode::Char('l');
+                        let was_executing = matches!(screen, BatchScreen::Executing { .. });
+                        let previous_screen = std::mem::replace(&mut screen, BatchScreen::Scanning);
+                        screen = handle_key_input(
+                            previous_screen,
+                            key_code,
+                            &event_tx,
+                            &config,
+                            &target_dir,
+                            include_global,
+                            &mut running,
+                        );
+                        if opens_popup {
+                            logs_popup_open = true;
+                            logs_popup_scroll_back = 0;
+                        }
+                        if !was_executing && matches!(screen, BatchScreen::Executing { .. }) {
+                            logs_popup_open = true;
+                            logs_popup_tab = 0;
+                            logs_popup_scroll_back = 0;
+                        }
+                    }
                 }
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollUp if logs_popup_open => logs_popup_scroll_back += 1,
+                    MouseEventKind::ScrollDown if logs_popup_open => {
+                        logs_popup_scroll_back = logs_popup_scroll_back.saturating_sub(1)
+                    }
+                    _ => {}
+                },
+                _ => {}
             }
         }
     }
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }
@@ -487,8 +592,14 @@ fn spawn_upgrade(
     target_dir: &Path,
     event_tx: &mpsc::UnboundedSender<BatchEvent>,
 ) {
-    let pipe = !dependency.is_global;
     let (command, args) = get_upgrade_cmd(dependency, target_dir);
+    let (line_tx, mut line_rx) = mpsc::unbounded_channel::<String>();
+    let log_event_tx = event_tx.clone();
+    tokio::spawn(async move {
+        while let Some(line) = line_rx.recv().await {
+            let _ = log_event_tx.send(BatchEvent::UpgradeLog(index, line));
+        }
+    });
     let upgrade_tx = event_tx.clone();
     let target = target_dir.to_path_buf();
     let dependency_for_backup = dependency.clone();
@@ -508,7 +619,7 @@ fn spawn_upgrade(
             }
         };
 
-        let upgrade_result = run_upgrade_process(&command, args, &target, pipe).await;
+        let upgrade_result = run_upgrade_process(&command, args, &target, Some(line_tx)).await;
         let upgrade_result = match upgrade_result {
             Ok(()) => {
                 if let Some(backup) = backup {
@@ -530,6 +641,42 @@ fn spawn_upgrade(
         };
         let _ = upgrade_tx.send(BatchEvent::UpgradeFinished(index, upgrade_result));
     });
+}
+
+fn log_tab_indices(screen: &BatchScreen) -> Vec<usize> {
+    match screen {
+        BatchScreen::Executing { items, .. } => items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.selection != SelectionState::None)
+            .map(|(index, _)| index)
+            .collect(),
+        BatchScreen::Report { items } => items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| !item.logs.is_empty())
+            .map(|(index, _)| index)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn batch_item_name(screen: &BatchScreen, index: usize) -> String {
+    match screen {
+        BatchScreen::Executing { items, .. } | BatchScreen::Report { items } => {
+            items[index].dependency.name.clone()
+        }
+        _ => String::new(),
+    }
+}
+
+fn batch_item_logs(screen: &BatchScreen, index: usize) -> &[String] {
+    match screen {
+        BatchScreen::Executing { items, .. } | BatchScreen::Report { items } => {
+            items[index].logs.as_slice()
+        }
+        _ => &[],
+    }
 }
 
 fn handle_key_input(
@@ -963,7 +1110,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
             );
             frame.render_widget(execution_paragraph, layout_chunks[1]);
 
-            let help_text = " [q] Sair ";
+            let help_text = " [q] Sair | [l] Logs ";
             let help_widget =
                 Paragraph::new(help_text).style(Style::default().fg(Color::Black).bg(Color::Cyan));
             frame.render_widget(help_widget, layout_chunks[2]);
@@ -1181,7 +1328,7 @@ fn render_batch(frame: &mut Frame, screen: &BatchScreen) {
                 .wrap(Wrap { trim: false });
             frame.render_widget(report_paragraph, layout_chunks[1]);
 
-            let help_text = " [q] Sair | [r] Re-escanear ";
+            let help_text = " [q] Sair | [r] Re-escanear | [l] Logs ";
             let help_widget =
                 Paragraph::new(help_text).style(Style::default().fg(Color::Black).bg(Color::Cyan));
             frame.render_widget(help_widget, layout_chunks[2]);
