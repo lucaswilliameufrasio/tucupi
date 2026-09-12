@@ -22,6 +22,24 @@ fn test_short_help_flag() {
         .stdout(predicate::str::contains("USAGE:"));
 }
 
+#[test]
+fn test_version_flag() {
+    let mut cmd = Command::cargo_bin("tucupi").unwrap();
+    cmd.arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn test_short_version_flag() {
+    let mut cmd = Command::cargo_bin("tucupi").unwrap();
+    cmd.arg("-V")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+}
+
 fn command_with_store_path(store_path: &std::path::Path) -> Command {
     let mut cmd = Command::cargo_bin("tucupi").unwrap();
     cmd.env("TUCUPI_TEST_SECRET_STORE_FILE", store_path);

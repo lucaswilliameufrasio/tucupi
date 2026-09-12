@@ -26,7 +26,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     for arg in &args[1..] {
-        if arg == "--help" || arg == "-h" {
+        if arg == "--version" || arg == "-V" {
+            println!("tucupi {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        } else if arg == "--help" || arg == "-h" {
             println!("🍵 TUCUPI");
             println!();
             println!("USAGE:");
@@ -36,6 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("OPTIONS:");
             println!("  -g, --global        Start on the Global Packages tab");
             println!("  -i, --interactive   Open interactive batch mode (npm-check style)");
+            println!("  -V, --version       Show the installed version");
             println!("  -h, --help          Show this help message");
             println!();
             println!("  directory           Target project directory (default: current dir)");
