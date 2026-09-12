@@ -3,6 +3,34 @@
 All notable changes to this project will be documented in this file.
 
 
+### <!-- 0 -->🚀 Features
+
+- Homebrew adapter, batch osv pre-scan, cvss severity, freshness check, aur provenance
+- Wire freshness/provenance/NVD into scan flow and detail UI
+- Fail closed and block AUR by default
+- Require valid provenance for pacman upgrades
+- Classify freshness and block very recent releases
+- Add local rollback for dependency upgrades
+- Add persistent cache and request concurrency limit
+- Refine vulnerability source merging and NVD filtering
+- Add package source review gate for AUR and Homebrew
+- Add toast notifications, upgrade log popup and responsive layout
+- Support tucupi.local.toml for secrets
+- Store NVD API key in the OS keychain
+- Add batch dependency upgrades and bounded logs
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Restore vuln colors and fix scroll wrapping
+- Prevent hanging upgrades, add --noconfirm and timeout
+- Filter pacman git versions, handle OSV 400 gracefully
+- Mise latest filter, inherit stdout for global pkgs, audit warning
+
+### <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Upgrade dependencies
+- Add setup/format/lint targets to Makefile
+
 ### <!-- 1 -->🐛 Bug Fixes
 
 - Add CDLA-Permissive-2.0 to accepted licenses
