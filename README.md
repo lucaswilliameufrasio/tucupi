@@ -147,11 +147,12 @@ tucupi --interactive
 |-----|--------|
 | `Tab` | Toggle Local/Global packages tab |
 | `↑` / `↓` | Navigate dependency list |
+| `Space` | Cycle the focused row: unselected, safe upgrade, forced upgrade |
 | `r` | Re-scan dependencies |
-| `u` | Safe upgrade (with security audit) |
-| `f` | Force upgrade (bypass warnings) |
-| `c` | Check security only (no upgrade) |
-| `l` | Open upgrade logs popup |
+| `u` | Upgrade selected rows using their safe/forced state; upgrades the focused row when none are selected |
+| `f` | Force upgrade selected rows; force upgrades the focused row when none are selected |
+| `c` | Audit selected rows without upgrading; audits the focused row when none are selected |
+| `l` | Open upgrade logs popup (`y` copies the active log) |
 | `k` | Set NVD API key (masked input, stored in the system keychain) |
 | `K` | Remove the stored NVD API key |
 | `Esc` / `Enter` | Close modal dialogs |

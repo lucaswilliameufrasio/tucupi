@@ -117,6 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             KeyCode::Right => app.log_popup_next_tab(),
                             KeyCode::Up => app.log_popup_scroll_up(),
                             KeyCode::Down => app.log_popup_scroll_down(),
+                            KeyCode::Char('y') => app.copy_active_log(),
                             KeyCode::Char('q') => break,
                             _ => {}
                         }
@@ -124,29 +125,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         match &app.modal {
                             Modal::ConfirmForce(_, _) => match key.code {
                                 KeyCode::Enter => {
-                                    app.trigger_upgrade_selected(true);
+                                    app.confirm_force_upgrade();
                                 }
                                 KeyCode::Esc => {
-                                    app.modal = Modal::None;
+                                    app.dismiss_modal();
                                 }
                                 _ => {}
                             },
                             Modal::Blocked(_, _) => match key.code {
                                 KeyCode::Enter | KeyCode::Esc => {
-                                    app.modal = Modal::None;
+                                    app.dismiss_modal();
                                 }
                                 _ => {}
                             },
                             Modal::BlockedPolicy(_, _) => match key.code {
                                 KeyCode::Enter | KeyCode::Esc => {
-                                    app.modal = Modal::None;
+                                    app.dismiss_modal();
                                 }
                                 _ => {}
                             },
                             Modal::ConfirmGlobal(_, _) => match key.code {
                                 KeyCode::Enter => app.confirm_global_upgrade(),
                                 KeyCode::Esc => {
-                                    app.modal = Modal::None;
+                                    app.dismiss_modal();
                                 }
                                 _ => {}
                             },
@@ -165,6 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 KeyCode::PageDown => app.detail_scroll_down(),
                                 KeyCode::Tab => app.switch_tab(),
                                 KeyCode::Char('r') => app.trigger_scan(),
+                                KeyCode::Char(' ') => app.toggle_selection(),
                                 KeyCode::Char('u') => app.trigger_upgrade_selected(false),
                                 KeyCode::Char('f') => app.trigger_upgrade_selected(true),
                                 KeyCode::Char('c') => app.check_security_selected(),

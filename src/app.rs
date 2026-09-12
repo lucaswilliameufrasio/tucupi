@@ -8,9 +8,10 @@ use crate::rollback::{commit_backup, prepare_local_backup, restore_backup};
 use crate::secrets::{resolve_nvd_api_key, SecretStore};
 use crate::security::{check_provenance, SecurityChecker};
 use ratatui::widgets::TableState;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncBufReadExt;
@@ -29,6 +30,44 @@ pub enum AppStatus {
     Upgrading(String),
     UpgradeSuccess(String),
     UpgradeFailed(String, String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionState {
+    Unselected,
+    Safe,
+    Force,
+}
+
+impl SelectionState {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Unselected => Self::Safe,
+            Self::Safe => Self::Force,
+            Self::Force => Self::Unselected,
+        }
+    }
+
+    pub fn marker(self) -> &'static str {
+        match self {
+            Self::Unselected => "[ ]",
+            Self::Safe => "[✓]",
+            Self::Force => "[⚡]",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperationKind {
+    Upgrade,
+    Audit,
+}
+
+#[derive(Debug, Clone)]
+struct QueuedOperation {
+    dep: Dependency,
+    force: bool,
+    kind: OperationKind,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +100,9 @@ pub struct DependencyLog {
     pub lines: Vec<String>,
 }
 
+const MAX_LOG_LINES_PER_DEPENDENCY: usize = 10_000;
+const MAX_DEPENDENCY_LOGS: usize = 20;
+
 pub enum AppEvent {
     ScanFinished(Tab, Vec<Dependency>),
     SecurityChecked(Dependency, Result<Vec<VulnerabilityInfo>, String>, bool),
@@ -76,6 +118,8 @@ pub struct App {
     pub active_tab: Tab,
     pub local_deps: Vec<Dependency>,
     pub global_deps: Vec<Dependency>,
+    pub local_selection: Vec<SelectionState>,
+    pub global_selection: Vec<SelectionState>,
     pub table_state: TableState,
     pub config: Config,
     pub security_checker: SecurityChecker,
@@ -85,7 +129,8 @@ pub struct App {
     pub review_cache: HashMap<String, ReviewReport>,
     pub freshness_cache: HashMap<String, FreshnessInfo>,
     pub provenance_cache: HashMap<String, ProvenanceInfo>,
-    pub security_check_only: bool,
+    pending_operations: VecDeque<QueuedOperation>,
+    active_operation: Option<QueuedOperation>,
     pub batch_scan_pending: usize,
     pub toasts: Vec<Toast>,
     pub upgrade_logs: Vec<DependencyLog>,
@@ -112,6 +157,8 @@ impl App {
             active_tab,
             local_deps: Vec::new(),
             global_deps: Vec::new(),
+            local_selection: Vec::new(),
+            global_selection: Vec::new(),
             table_state,
             config: Config::default(),
             security_checker: SecurityChecker::new(),
@@ -121,7 +168,8 @@ impl App {
             review_cache: HashMap::new(),
             freshness_cache: HashMap::new(),
             provenance_cache: HashMap::new(),
-            security_check_only: false,
+            pending_operations: VecDeque::new(),
+            active_operation: None,
             batch_scan_pending: 0,
             toasts: Vec::new(),
             upgrade_logs: Vec::new(),
@@ -149,6 +197,43 @@ impl App {
             Some(&deps[idx])
         } else {
             None
+        }
+    }
+
+    pub fn selected_count(&self) -> usize {
+        self.current_selection()
+            .iter()
+            .filter(|state| **state != SelectionState::Unselected)
+            .count()
+    }
+
+    pub fn selection_state(&self, index: usize) -> SelectionState {
+        self.current_selection()
+            .get(index)
+            .copied()
+            .unwrap_or(SelectionState::Unselected)
+    }
+
+    pub fn toggle_selection(&mut self) {
+        let Some(index) = self.table_state.selected() else {
+            return;
+        };
+        if let Some(state) = self.current_selection_mut().get_mut(index) {
+            *state = state.next();
+        }
+    }
+
+    fn current_selection(&self) -> &Vec<SelectionState> {
+        match self.active_tab {
+            Tab::Local => &self.local_selection,
+            Tab::Global => &self.global_selection,
+        }
+    }
+
+    fn current_selection_mut(&mut self) -> &mut Vec<SelectionState> {
+        match self.active_tab {
+            Tab::Local => &mut self.local_selection,
+            Tab::Global => &mut self.global_selection,
         }
     }
 
@@ -255,6 +340,17 @@ impl App {
         self.log_popup_scroll_back = self.log_popup_scroll_back.saturating_sub(1);
     }
 
+    pub fn copy_active_log(&mut self) {
+        let Some(log) = self.upgrade_logs.get(self.log_popup_tab) else {
+            return;
+        };
+        let log_text = log.lines.join("\n");
+        match copy_to_clipboard(&log_text) {
+            Ok(()) => self.push_toast(ToastKind::Success, t("toast_log_copied").to_string()),
+            Err(error) => self.push_toast(ToastKind::Error, tf("toast_log_copy_failed", &[&error])),
+        }
+    }
+
     pub fn open_secret_input(&mut self) {
         self.modal = Modal::SecretInput {
             buffer: String::new(),
@@ -301,7 +397,11 @@ impl App {
     fn append_upgrade_log(&mut self, name: &str, line: String) {
         if let Some(log) = self.upgrade_logs.iter_mut().find(|log| log.name == name) {
             log.lines.push(line);
+            retain_recent_log_lines(&mut log.lines);
         } else {
+            if self.upgrade_logs.len() == MAX_DEPENDENCY_LOGS {
+                self.upgrade_logs.remove(0);
+            }
             self.upgrade_logs.push(DependencyLog {
                 name: name.to_string(),
                 lines: vec![line],
@@ -318,9 +418,14 @@ impl App {
     }
 
     pub fn trigger_scan(&mut self) {
+        if self.active_operation.is_some() {
+            return;
+        }
         self.status = AppStatus::Scanning;
         self.local_deps.clear();
         self.global_deps.clear();
+        self.local_selection.clear();
+        self.global_selection.clear();
         self.vuln_cache.clear();
         self.freshness_cache.clear();
         self.provenance_cache.clear();
@@ -381,6 +486,21 @@ impl App {
             self.modal = Modal::None;
             self.start_upgrade_confirmed(dep);
         }
+    }
+
+    pub fn confirm_force_upgrade(&mut self) {
+        let Some(operation) = self.active_operation.clone() else {
+            return;
+        };
+        if matches!(self.modal, Modal::ConfirmForce(_, _)) {
+            self.modal = Modal::None;
+            self.start_upgrade(operation.dep, true);
+        }
+    }
+
+    pub fn dismiss_modal(&mut self) {
+        self.modal = Modal::None;
+        self.finish_operation(false);
     }
 
     fn trigger_batch_security_scan(&mut self) {
@@ -458,22 +578,82 @@ impl App {
     }
 
     pub fn trigger_upgrade_selected(&mut self, force: bool) {
-        let dep = match self.selected_dep() {
-            Some(d) => d.clone(),
-            None => return,
-        };
+        self.queue_selected_operations(OperationKind::Upgrade, force);
+    }
 
+    fn queue_selected_operations(&mut self, kind: OperationKind, force_all: bool) {
+        if self.active_operation.is_some()
+            || !self.pending_operations.is_empty()
+            || (self.status != AppStatus::Ready
+                && !matches!(self.status, AppStatus::UpgradeFailed(_, _)))
+        {
+            return;
+        }
+
+        let selected_operations: Vec<QueuedOperation> = self
+            .current_deps()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, dep)| {
+                let state = self.selection_state(index);
+                if state == SelectionState::Unselected {
+                    None
+                } else {
+                    Some(QueuedOperation {
+                        dep: dep.clone(),
+                        force: force_all || state == SelectionState::Force,
+                        kind,
+                    })
+                }
+            })
+            .collect();
+
+        if selected_operations.is_empty() {
+            let Some(dep) = self.selected_dep().cloned() else {
+                return;
+            };
+            self.pending_operations.push_back(QueuedOperation {
+                dep,
+                force: force_all,
+                kind,
+            });
+        } else {
+            self.pending_operations.extend(selected_operations);
+        }
+        self.start_next_operation();
+    }
+
+    fn start_next_operation(&mut self) {
+        let Some(operation) = self.pending_operations.pop_front() else {
+            return;
+        };
+        self.active_operation = Some(operation.clone());
+        match operation.kind {
+            OperationKind::Upgrade => self.start_upgrade_operation(operation.dep, operation.force),
+            OperationKind::Audit => self.start_security_audit(operation.dep),
+        }
+    }
+
+    fn finish_operation(&mut self, refresh: bool) {
+        self.active_operation = None;
+        if !self.pending_operations.is_empty() {
+            self.status = AppStatus::Ready;
+            self.start_next_operation();
+        } else if refresh {
+            self.trigger_scan();
+        } else if !matches!(self.status, AppStatus::UpgradeFailed(_, _)) {
+            self.status = AppStatus::Ready;
+        }
+    }
+
+    fn start_upgrade_operation(&mut self, dep: Dependency, force: bool) {
         if let Some(message) = self.policy_block_reason(&dep) {
             self.block_with_policy_message(dep, message);
             return;
         }
 
-        if self.status != AppStatus::Ready && !matches!(self.status, AppStatus::UpgradeFailed(_, _))
-        {
-            return;
-        }
-
         if !dep.is_global && !is_safe_path(&self.target_dir) {
+            self.finish_operation(false);
             return;
         }
 
@@ -504,6 +684,7 @@ impl App {
                         ToastKind::Error,
                         tf("toast_security_check_failed", &[&dep.name]),
                     );
+                    self.finish_operation(false);
                 }
             }
             return;
@@ -533,20 +714,12 @@ impl App {
     }
 
     pub fn check_security_selected(&mut self) {
-        let dep = match self.selected_dep() {
-            Some(d) => d.clone(),
-            None => return,
-        };
+        self.queue_selected_operations(OperationKind::Audit, false);
+    }
 
-        if self.status != AppStatus::Ready {
-            return;
-        }
-
-        if self.batch_scan_pending > 0 {
-            return;
-        }
-
+    fn start_security_audit(&mut self, dep: Dependency) {
         if !dep.is_global && !is_safe_path(&self.target_dir) {
+            self.finish_operation(false);
             return;
         }
 
@@ -558,10 +731,10 @@ impl App {
         );
 
         if self.vuln_cache.contains_key(&cache_key) {
+            self.finish_operation(false);
             return;
         }
 
-        self.security_check_only = true;
         self.status = AppStatus::Upgrading(format!("Auditing security for {}...", dep.name));
         let tx = self.event_tx.clone();
         let checker = SecurityChecker::new_with_config(
@@ -583,16 +756,6 @@ impl App {
                 }
             }
         });
-
-        if review::needs_review(&dep) && self.config.pkgbuild_review() {
-            let review_tx = self.event_tx.clone();
-            let review_config = self.config.clone();
-            let review_dep = dep;
-            tokio::spawn(async move {
-                let report = review::review_package(&review_dep, &review_config).await;
-                let _ = review_tx.send(AppEvent::ReviewChecked(review_dep, report, false, true));
-            });
-        }
     }
 
     pub fn process_security_result(
@@ -616,15 +779,32 @@ impl App {
             return;
         }
 
-        if self.security_check_only {
-            self.security_check_only = false;
-            self.status = AppStatus::Ready;
+        if matches!(
+            self.active_operation
+                .as_ref()
+                .map(|operation| operation.kind),
+            Some(OperationKind::Audit)
+        ) {
+            if review::needs_review(&dep) && self.config.pkgbuild_review() {
+                let review_tx = self.event_tx.clone();
+                let review_config = self.config.clone();
+                tokio::spawn(async move {
+                    let report = review::review_package(&dep, &review_config).await;
+                    let _ = review_tx.send(AppEvent::ReviewChecked(dep, report, false, true));
+                });
+            } else {
+                self.finish_operation(false);
+            }
             return;
         }
 
         match res {
             Ok(vulns) => {
-                self.process_upgrade_with_vulns(dep, vulns, false);
+                let force = self
+                    .active_operation
+                    .as_ref()
+                    .is_some_and(|operation| operation.force);
+                self.process_upgrade_with_vulns(dep, vulns, force);
             }
             Err(err_msg) => {
                 if self.config.require_online() {
@@ -642,6 +822,7 @@ impl App {
                         ToastKind::Error,
                         tf("toast_security_check_failed", &[&package_name]),
                     );
+                    self.finish_operation(false);
                 } else {
                     self.modal = Modal::ConfirmForce(
                         dep,
@@ -696,7 +877,6 @@ impl App {
         self.review_cache.insert(cache_key, report.clone());
 
         if audit_only {
-            self.status = AppStatus::Ready;
             if report.verdict != ReviewVerdict::Safe {
                 self.modal = Modal::BlockedPolicy(
                     dep,
@@ -705,6 +885,8 @@ impl App {
                         &[report.verdict.as_str(), &report.reason],
                     ),
                 );
+            } else {
+                self.finish_operation(false);
             }
             return;
         }
@@ -892,8 +1074,14 @@ impl App {
         match event {
             AppEvent::ScanFinished(tab, deps) => {
                 match tab {
-                    Tab::Local => self.local_deps = deps,
-                    Tab::Global => self.global_deps = deps,
+                    Tab::Local => {
+                        self.local_selection = vec![SelectionState::Unselected; deps.len()];
+                        self.local_deps = deps;
+                    }
+                    Tab::Global => {
+                        self.global_selection = vec![SelectionState::Unselected; deps.len()];
+                        self.global_deps = deps;
+                    }
                 }
                 if self.status == AppStatus::Scanning {
                     self.status = AppStatus::Ready;
@@ -945,7 +1133,7 @@ impl App {
                     };
                     self.push_toast(ToastKind::Success, tf("toast_upgrade_success", &[&name]));
                     self.status = AppStatus::UpgradeSuccess(name);
-                    self.trigger_scan();
+                    self.finish_operation(true);
                 }
                 Err(err_msg) => {
                     let name = match self.status {
@@ -958,6 +1146,7 @@ impl App {
                     };
                     self.push_toast(ToastKind::Error, tf("toast_upgrade_failed", &[&name]));
                     self.status = AppStatus::UpgradeFailed(name, err_msg);
+                    self.finish_operation(false);
                 }
             },
         }
@@ -1016,6 +1205,7 @@ pub(crate) fn get_upgrade_cmd(dep: &Dependency, target_dir: &Path) -> (String, V
                     "install".to_string(),
                     dep.name.clone(),
                     "--force".to_string(),
+                    "--locked".to_string(),
                 ],
             ),
             Ecosystem::Pacman => (
@@ -1272,6 +1462,42 @@ fn cache_key(dep: &Dependency) -> String {
     )
 }
 
+fn retain_recent_log_lines(lines: &mut Vec<String>) {
+    let excess = lines.len().saturating_sub(MAX_LOG_LINES_PER_DEPENDENCY);
+    if excess > 0 {
+        lines.drain(..excess);
+    }
+}
+
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("pbcopy");
+    #[cfg(target_os = "windows")]
+    let mut command = Command::new("clip");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xclip");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    command.args(["-selection", "clipboard"]);
+
+    let mut child = command
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let stdin = child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| "Failed to open clipboard input".to_string())?;
+    stdin
+        .write_all(text.as_bytes())
+        .map_err(|error| error.to_string())?;
+    let status = child.wait().map_err(|error| error.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Clipboard command failed".to_string())
+    }
+}
+
 fn review_to_vuln_info(report: &ReviewReport) -> VulnerabilityInfo {
     let hits_summary = report
         .hits
@@ -1347,5 +1573,48 @@ mod tests {
         let result = run_upgrade_process("true", vec![], Path::new("."), None).await;
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn selection_state_cycles_from_unselected_to_safe_to_force() {
+        assert_eq!(SelectionState::Unselected.next(), SelectionState::Safe);
+        assert_eq!(SelectionState::Safe.next(), SelectionState::Force);
+        assert_eq!(SelectionState::Force.next(), SelectionState::Unselected);
+    }
+
+    #[test]
+    fn retain_recent_log_lines_keeps_the_configured_limit() {
+        let mut lines: Vec<String> = (0..=MAX_LOG_LINES_PER_DEPENDENCY)
+            .map(|index| index.to_string())
+            .collect();
+
+        retain_recent_log_lines(&mut lines);
+
+        assert_eq!(lines.len(), MAX_LOG_LINES_PER_DEPENDENCY);
+        assert_eq!(lines.first(), Some(&"1".to_string()));
+        assert_eq!(
+            lines.last(),
+            Some(&MAX_LOG_LINES_PER_DEPENDENCY.to_string())
+        );
+    }
+
+    #[test]
+    fn cargo_global_upgrade_uses_locked_install() {
+        let dependency = Dependency {
+            name: "cargo-nextest".to_string(),
+            current_version: "0.9.143".to_string(),
+            latest_version: "0.9.144".to_string(),
+            ecosystem: Ecosystem::Cargo,
+            is_global: true,
+            origin: None,
+        };
+
+        let (command, arguments) = get_upgrade_cmd(&dependency, Path::new("."));
+
+        assert_eq!(command, "cargo");
+        assert_eq!(
+            arguments,
+            vec!["install", "cargo-nextest", "--force", "--locked"]
+        );
     }
 }

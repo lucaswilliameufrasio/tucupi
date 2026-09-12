@@ -146,6 +146,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     let deps = app.current_deps().clone();
     let header_cells = vec![
+        t("col_selection"),
         t("col_ecosystem"),
         t("col_package"),
         t("col_current"),
@@ -162,7 +163,8 @@ pub fn render(f: &mut Frame, app: &mut App) {
 
     let rows: Vec<Row> = deps
         .iter()
-        .map(|dep| {
+        .enumerate()
+        .map(|(index, dep)| {
             let color = eco_color(dep.ecosystem);
             let cache_key = format!(
                 "{}_{}_{}",
@@ -189,6 +191,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
                 };
 
             Row::new(vec![
+                Cell::from(app.selection_state(index).marker()),
                 Cell::from(dep.ecosystem.as_str().to_string())
                     .style(Style::default().fg(color).add_modifier(Modifier::BOLD)),
                 Cell::from(dep.name.clone()),
@@ -199,14 +202,21 @@ pub fn render(f: &mut Frame, app: &mut App) {
         })
         .collect();
 
-    let tab_title = match app.active_tab {
-        Tab::Local => t("table_title_local"),
-        Tab::Global => t("table_title_global"),
-    };
+    let tab_title = tf(
+        "table_title_selected",
+        &[
+            match app.active_tab {
+                Tab::Local => t("table_title_local"),
+                Tab::Global => t("table_title_global"),
+            },
+            &app.selected_count().to_string(),
+        ],
+    );
 
     let table = Table::new(
         rows,
         [
+            Constraint::Length(5),
             Constraint::Percentage(20),
             Constraint::Percentage(35),
             Constraint::Percentage(15),

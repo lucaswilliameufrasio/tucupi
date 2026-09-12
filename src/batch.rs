@@ -29,6 +29,8 @@ use ratatui::{
     Frame, Terminal,
 };
 
+const MAX_LOG_LINES_PER_DEPENDENCY: usize = 10_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SelectionState {
     None,
@@ -223,6 +225,7 @@ pub async fn run(
                         BatchScreen::Executing { items, .. } | BatchScreen::Report { items } => {
                             is_first_line = items[index].logs.is_empty();
                             items[index].logs.push(line);
+                            retain_recent_log_lines(&mut items[index].logs);
                         }
                         _ => {}
                     }
@@ -678,6 +681,13 @@ fn batch_item_logs(screen: &BatchScreen, index: usize) -> &[String] {
             items[index].logs.as_slice()
         }
         _ => &[],
+    }
+}
+
+fn retain_recent_log_lines(lines: &mut Vec<String>) {
+    let excess = lines.len().saturating_sub(MAX_LOG_LINES_PER_DEPENDENCY);
+    if excess > 0 {
+        lines.drain(..excess);
     }
 }
 
