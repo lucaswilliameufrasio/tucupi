@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 
 ### <!-- 0 -->🚀 Features
 
+- Add version flag
+
+### <!-- 0 -->🚀 Features
+
 - Homebrew adapter, batch osv pre-scan, cvss severity, freshness check, aur provenance
 - Wire freshness/provenance/NVD into scan flow and detail UI
 - Fail closed and block AUR by default
@@ -25,6 +29,7 @@ All notable changes to this project will be documented in this file.
 - Prevent hanging upgrades, add --noconfirm and timeout
 - Filter pacman git versions, handle OSV 400 gracefully
 - Mise latest filter, inherit stdout for global pkgs, audit warning
+- Use native Linux keyring backend
 
 ### <!-- 7 -->⚙️ Miscellaneous Tasks
 
