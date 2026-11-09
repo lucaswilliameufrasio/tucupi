@@ -46,6 +46,8 @@ tempfile = "3.14"
 inherits = "release"
 lto = "thin"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2.189"
+
+[target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }

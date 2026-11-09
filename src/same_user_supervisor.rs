@@ -276,8 +276,8 @@ pub struct SyntheticFileSnapshot {
 impl SyntheticFileSnapshot {
     pub(crate) fn valid(&self) -> bool {
         self.version == 1
-            && !self.cargo_toml.as_ref().is_some_and(|v| v.len() > 65536)
-            && !self.cargo_lock.as_ref().is_some_and(|v| v.len() > 65536)
+            && self.cargo_toml.as_ref().is_none_or(|v| v.len() <= 65536)
+            && self.cargo_lock.as_ref().is_none_or(|v| v.len() <= 65536)
     }
 }
 
