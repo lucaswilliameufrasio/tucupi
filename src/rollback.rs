@@ -15,7 +15,7 @@ pub struct BackupHandle {
     entries: Vec<BackupEntry>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn fixture_keep_synthetic_backup(backup: BackupHandle) -> PathBuf {
     // Fixture only: keeping a directory is not an authenticated recovery record.
     backup._temp_dir.keep()
