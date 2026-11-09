@@ -49,6 +49,10 @@ src/
 
 ## Security
 
+The proposed Linux review-supervision trust boundary and its unverified
+acceptance requirements are documented in [codex-supervision-trust-boundary.md](codex-supervision-trust-boundary.md).
+It is not a production supervisor and does not enable Codex.
+
 - All external commands use `tokio::process::Command` (no shell)
 - HTTP clients have 3-second timeouts (review fetches: 15s)
 - Root-requiring upgrade commands (`pacman`, `paru`) verify `sudo -n` first and fail

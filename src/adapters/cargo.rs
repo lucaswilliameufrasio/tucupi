@@ -30,6 +30,15 @@ impl CargoAdapter {
     }
 
     pub async fn check_outdated(&self, dir: &Path) -> Result<Vec<Dependency>> {
+        self.check_outdated_from_registry(dir, "https://crates.io/api/v1/crates")
+            .await
+    }
+
+    async fn check_outdated_from_registry(
+        &self,
+        dir: &Path,
+        registry: &str,
+    ) -> Result<Vec<Dependency>> {
         let cargo_toml_path = dir.join("Cargo.toml");
         if !cargo_toml_path.exists() {
             return Ok(Vec::new());
@@ -66,8 +75,9 @@ impl CargoAdapter {
 
         for (name, current_constraint) in deps_to_check {
             let client = self.client.clone();
+            let registry = registry.to_owned();
             tasks.push(tokio::spawn(async move {
-                let url = format!("https://crates.io/api/v1/crates/{}", name);
+                let url = format!("{registry}/{name}");
                 let response = client.get(&url).send().await;
                 if let Ok(resp) = response {
                     if resp.status().is_success() {
@@ -126,26 +136,106 @@ impl CargoAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
     async fn test_cargo_adapter_outdated() {
-        let mock_path = PathBuf::from("../mock-project");
-        if !mock_path.exists() {
-            return;
-        }
-        let adapter = CargoAdapter::try_new().unwrap();
-        let outdated = adapter.check_outdated(&mock_path).await.unwrap();
-
-        assert!(
-            !outdated.is_empty(),
-            "Mock project should have outdated dependencies"
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("Cargo.toml"),
+            r#"
+[dependencies]
+outdated = "^1.0.0"
+current = "2.0.0"
+missing = "1.0.0"
+[dev-dependencies]
+dev = { version = "~1.0.0" }
+[build-dependencies]
+build = "=1.0.0"
+"#,
+        )
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut seen = std::collections::HashSet::new();
+            for _ in 0..5 {
+                let (mut stream, _) =
+                    tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                loop {
+                    let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut chunk))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&chunk[..n]);
+                    assert!(request.len() <= 8192);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = std::str::from_utf8(&request).unwrap();
+                let target = request
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap();
+                assert!(seen.insert(target.to_string()));
+                let (status, body) = match target {
+                    "/api/v1/crates/outdated" => ("200 OK", r#"{"crate":{"max_version":"1.2.0"}}"#),
+                    "/api/v1/crates/current" => ("200 OK", r#"{"crate":{"max_version":"2.0.0"}}"#),
+                    "/api/v1/crates/dev" => ("200 OK", r#"{"crate":{"max_version":"1.3.0"}}"#),
+                    "/api/v1/crates/build" => ("200 OK", r#"{"crate":{"max_version":"1.1.0"}}"#),
+                    "/api/v1/crates/missing" => ("404 Not Found", "{}"),
+                    _ => panic!("unexpected synthetic request"),
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+            seen
+        });
+        let client = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(3))
+            .build()
+            .unwrap();
+        let adapter = CargoAdapter { client };
+        let outdated = adapter
+            .check_outdated_from_registry(project.path(), &format!("http://{addr}/api/v1/crates"))
+            .await
+            .unwrap();
+        let seen = server.await.unwrap();
+        assert_eq!(seen.len(), 5);
+        let actual: std::collections::HashSet<_> = outdated
+            .iter()
+            .map(|dep| {
+                (
+                    dep.name.as_str(),
+                    dep.current_version.as_str(),
+                    dep.latest_version.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            std::collections::HashSet::from([
+                ("outdated", "^1.0.0", "1.2.0"),
+                ("dev", "~1.0.0", "1.3.0"),
+                ("build", "=1.0.0", "1.1.0")
+            ])
         );
-
-        let anyhow_dep = outdated.iter().find(|d| d.name == "anyhow");
-        assert!(anyhow_dep.is_some(), "Should detect anyhow as outdated");
-
-        let serde_dep = outdated.iter().find(|d| d.name == "serde");
-        assert!(serde_dep.is_some(), "Should detect serde as outdated");
     }
 }

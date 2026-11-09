@@ -8,9 +8,17 @@ repository = "https://github.com/lucaswilliameufrasio/tucupi"
 license = "MIT"
 default-run = "tucupi"
 
+[features]
+codex-fixture = []
+review-pty-fixture = []
+
+[[example]]
+name = "codex_transport_fixture"
+required-features = ["codex-fixture"]
+
 [dependencies]
 ratatui = { version = "0.30.1", features = ["unstable-rendered-line-info"] }
-crossterm = "0.29.0"
+crossterm = { version = "0.29.0", features = ["use-dev-tty"] }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "process", "fs", "io-util"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
@@ -26,6 +34,7 @@ tempfile = "3.27.0"
 predicates = "3.1.4"
 assert_cmd = "2.2.2"
 similar = "3.2.0"
+sha2 = "0.10.9"
 
 [dev-dependencies]
 assert_cmd = "2.0"
@@ -36,3 +45,7 @@ tempfile = "3.14"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2.189"
+zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }

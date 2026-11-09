@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- Add direct API source review for OpenRouter, OpenAI, Anthropic, DeepSeek, Z.ai and Kimi, with keychain-backed configuration in the TUI.
+- Move TUI shortcuts into a scrollable commands panel opened with `?`.
+- Show inconclusive source reviews separately from vulnerability alerts.
+- Require confirmation when indirect upgrade impacts have not been fully analyzed; show advisory Homebrew and npm dry-run previews in both interfaces.
+- Show an advisory Composer dry-run preview without executing plugins or scripts.
+- Show an advisory pip dry-run preview restricted to binary wheels.
+- Show an advisory dry-run preview for mise upgrades.
+- Show an advisory Dart pub dry-run preview without precompiling executables.
+- Show a partial pacman preview for official Arch packages, explicitly distinguishing it from paru and AUR.
+- Allow choosing OpenCode or the on-device Apple Foundation Model for source review.
+- Add Claude Code as a configurable source review provider.
+- Temporarily disable OpenCode source review until isolation is verified; invalidate previous cached review verdicts.
+- Temporarily disable Claude Code source review pending verified isolation and invalidate previous cached review verdicts.
+- Treat model responses without a reason as inconclusive instead of accepting a safe verdict.
+- Translate interactive batch progress, confirmation, and report messages consistently.
+- Localize main-view audit and upgrade status and distinguish unavailable online audits from vulnerabilities.
+- Localize source-review diagnostics, rollback messages and execution guidance; label external details as original.
+
 
 ### <!-- 0 -->🚀 Features
 

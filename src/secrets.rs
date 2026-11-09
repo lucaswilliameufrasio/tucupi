@@ -6,6 +6,80 @@ pub const KEYCHAIN_NVD_ACCOUNT: &str = "nvd-api-key";
 pub const NVD_KEY_ENV: &str = "TUCUPI_NVD_API_KEY";
 pub const TEST_SECRET_STORE_ENV: &str = "TUCUPI_TEST_SECRET_STORE_FILE";
 
+/// API credentials are stored separately from the NVD credential and from one
+/// another. These identifiers are not model names or endpoint URLs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewApiProvider {
+    OpenRouter,
+    OpenAi,
+    Anthropic,
+    DeepSeek,
+    Zai,
+    Kimi,
+}
+
+impl ReviewApiProvider {
+    pub const ALL: [Self; 6] = [
+        Self::OpenRouter,
+        Self::OpenAi,
+        Self::Anthropic,
+        Self::DeepSeek,
+        Self::Zai,
+        Self::Kimi,
+    ];
+
+    pub fn keychain_account(self) -> &'static str {
+        match self {
+            Self::OpenRouter => "review-openrouter-api-key",
+            Self::OpenAi => "review-openai-api-key",
+            Self::Anthropic => "review-anthropic-api-key",
+            Self::DeepSeek => "review-deepseek-api-key",
+            Self::Zai => "review-zai-api-key",
+            Self::Kimi => "review-kimi-api-key",
+        }
+    }
+
+    pub fn from_config(value: &str) -> Option<Self> {
+        match value {
+            "openrouter" => Some(Self::OpenRouter),
+            "openai" => Some(Self::OpenAi),
+            "anthropic" => Some(Self::Anthropic),
+            "deepseek" => Some(Self::DeepSeek),
+            "zai" => Some(Self::Zai),
+            "kimi" => Some(Self::Kimi),
+            _ => None,
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::OpenRouter => "openrouter",
+            Self::OpenAi => "openai",
+            Self::Anthropic => "anthropic",
+            Self::DeepSeek => "deepseek",
+            Self::Zai => "zai",
+            Self::Kimi => "kimi",
+        }
+    }
+}
+
+#[cfg(test)]
+mod review_provider_account_tests {
+    use super::{KeyringSecretStore, ReviewApiProvider, KEYCHAIN_NVD_ACCOUNT};
+    use std::collections::HashSet;
+
+    #[test]
+    fn review_accounts_are_distinct_and_do_not_replace_nvd() {
+        let mut accounts = HashSet::new();
+        for provider in ReviewApiProvider::ALL {
+            let store = KeyringSecretStore::for_review_provider(provider);
+            assert_ne!(store.account, KEYCHAIN_NVD_ACCOUNT);
+            assert!(accounts.insert(store.account));
+        }
+        assert_eq!(accounts.len(), 6);
+    }
+}
+
 pub trait SecretStore: Send + Sync {
     fn set_secret(&self, value: &str) -> Result<(), String>;
     fn get_secret(&self) -> Result<Option<String>, String>;
@@ -18,6 +92,13 @@ pub struct KeyringSecretStore {
 }
 
 impl KeyringSecretStore {
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn fixture(service: &str, account: &str) -> Self {
+        Self {
+            service: service.to_owned(),
+            account: account.to_owned(),
+        }
+    }
     pub fn new() -> Self {
         Self {
             service: KEYCHAIN_SERVICE.to_string(),
@@ -25,10 +106,70 @@ impl KeyringSecretStore {
         }
     }
 
+    pub fn for_review_provider(provider: ReviewApiProvider) -> Self {
+        Self {
+            service: review_keychain_service(),
+            account: provider.keychain_account().to_string(),
+        }
+    }
+
+    pub fn for_review_selection() -> Self {
+        Self {
+            service: review_keychain_service(),
+            account: "review-provider-selection".to_string(),
+        }
+    }
+
     fn entry(&self) -> Result<keyring::Entry, String> {
         keyring::Entry::new(&self.service, &self.account)
             .map_err(|err| format!("system keychain unavailable: {}", err))
     }
+}
+
+fn review_keychain_service() -> String {
+    #[cfg(all(target_os = "linux", feature = "review-pty-fixture"))]
+    if let Some(service) = crate::review_pty_fixture::service() {
+        return service;
+    }
+    KEYCHAIN_SERVICE.to_string()
+}
+
+pub fn save_review_selection(
+    store: &dyn SecretStore,
+    provider: ReviewApiProvider,
+    model: &str,
+) -> Result<(), String> {
+    if model.trim().is_empty() || model.len() > 256 || model.chars().any(char::is_control) {
+        return Err("invalid model".into());
+    }
+    let value = serde_json::json!({"provider": provider.id(), "model": model}).to_string();
+    store.set_secret(&value)
+}
+
+pub fn read_review_selection(
+    store: &dyn SecretStore,
+) -> Result<Option<(ReviewApiProvider, String)>, String> {
+    let Some(value) = store.get_secret()? else {
+        return Ok(None);
+    };
+    if value.len() > 2048 {
+        return Err("invalid review selection".into());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&value).map_err(|_| "invalid review selection")?;
+    let provider = value
+        .get("provider")
+        .and_then(serde_json::Value::as_str)
+        .and_then(ReviewApiProvider::from_config)
+        .ok_or("invalid review selection")?;
+    let model = value
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("invalid review selection")?;
+    if model.trim().is_empty() || model.len() > 256 || model.chars().any(char::is_control) {
+        return Err("invalid review selection".into());
+    }
+    Ok(Some((provider, model.to_string())))
 }
 
 impl Default for KeyringSecretStore {
@@ -188,6 +329,16 @@ pub struct NvdKeyStatus {
 }
 
 impl NvdKeyStatus {
+    fn localized_description(&self) -> &'static str {
+        let key = match &self.stored_in_keychain {
+            Ok(true) => "config_status_keychain",
+            Ok(false) if self.from_environment => "config_status_environment",
+            Ok(false) => "config_status_missing",
+            Err(_) if self.from_environment => "config_status_unavailable_environment",
+            Err(_) => "config_status_unavailable",
+        };
+        crate::i18n::t(key)
+    }
     pub fn describe(&self) -> String {
         match &self.stored_in_keychain {
             Ok(true) => "configured (source: system keychain)".to_string(),
@@ -243,12 +394,7 @@ pub fn run_config_command(args: &[String]) -> Result<(), Box<dyn std::error::Err
         Some("set-nvd-key") => set_nvd_key_command(&*store),
         Some("remove-nvd-key") => remove_nvd_key_command(&*store),
         Some("status") => status_command(&*store),
-        _ => {
-            eprintln!(
-                "Unknown config command. Use: tucupi config <set-nvd-key|remove-nvd-key|status>"
-            );
-            Err("invalid config command".into())
-        }
+        _ => Err(crate::i18n::t("config_invalid").into()),
     }
 }
 
@@ -256,8 +402,8 @@ pub fn set_nvd_key_command(store: &dyn SecretStore) -> Result<(), Box<dyn std::e
     use std::io::IsTerminal;
 
     if std::io::stdin().is_terminal() {
-        println!("Enter the NVD API key (input is hidden):");
-        let value = rpassword::prompt_password("NVD API key: ")?;
+        println!("{}", crate::i18n::t("config_prompt_help"));
+        let value = rpassword::prompt_password(crate::i18n::t("config_prompt"))?;
         apply_set_nvd_key(store, value)
     } else {
         let mut line = String::new();
@@ -272,45 +418,72 @@ pub fn apply_set_nvd_key(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let value = raw.trim().to_string();
     if value.is_empty() {
-        eprintln!("No key provided: aborted.");
-        return Err("empty NVD API key".into());
+        return Err(crate::i18n::t("config_empty").into());
     }
     store
         .set_secret(&value)
         .map_err(|err| -> Box<dyn std::error::Error> {
-            format!("Failed to store the NVD API key: {}", err).into()
+            crate::i18n::tf("config_store_error", &[&err.to_string()]).into()
         })?;
-    println!("NVD API key saved to the system keychain.");
+    println!("{}", crate::i18n::t("config_saved"));
     Ok(())
 }
 
 pub fn remove_nvd_key_command(store: &dyn SecretStore) -> Result<(), Box<dyn std::error::Error>> {
     match store.get_secret() {
-        Ok(None) => println!("No NVD API key is stored."),
+        Ok(None) => println!("{}", crate::i18n::t("config_no_stored_key")),
         Ok(Some(_)) => {
             store
                 .delete_secret()
                 .map_err(|err| -> Box<dyn std::error::Error> {
-                    format!("Failed to remove the NVD API key: {}", err).into()
+                    crate::i18n::tf("config_remove_error", &[&err.to_string()]).into()
                 })?;
-            println!("NVD API key removed from the system keychain.");
+            println!("{}", crate::i18n::t("config_removed"));
         }
         Err(err) => {
-            eprintln!("Failed to access the system keychain: {}", err);
-            return Err("keychain access failed".into());
+            return Err(crate::i18n::tf("config_access_error", &[&err.to_string()]).into());
         }
     }
     Ok(())
 }
 
 pub fn status_command(store: &dyn SecretStore) -> Result<(), Box<dyn std::error::Error>> {
-    println!("NVD API key: {}", nvd_key_status(store).describe());
+    println!(
+        "{}",
+        crate::i18n::tf(
+            "config_status",
+            &[nvd_key_status(store).localized_description()]
+        )
+    );
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an isolated Linux keyutils session; use keyctl session"]
+    fn isolated_linux_keyring_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let service = format!(
+            "tucupi-test-{}",
+            directory.path().file_name().unwrap().to_string_lossy()
+        );
+        let store = KeyringSecretStore {
+            service,
+            account: "synthetic".into(),
+        };
+        assert_eq!(store.get_secret().unwrap(), None);
+        store.set_secret("synthetic-value").unwrap();
+        assert_eq!(
+            store.get_secret().unwrap().as_deref(),
+            Some("synthetic-value")
+        );
+        store.delete_secret().unwrap();
+        assert_eq!(store.get_secret().unwrap(), None);
+    }
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 

@@ -25,13 +25,14 @@ fn eco_color(ecosystem: Ecosystem) -> Color {
     }
 }
 
-fn vuln_count_style(count: usize) -> Style {
+fn vuln_count_style(count: Option<usize>) -> Style {
     match count {
-        0 => Style::default()
+        None => Style::default().fg(Color::DarkGray),
+        Some(0) => Style::default()
             .fg(Color::Green)
             .add_modifier(Modifier::BOLD),
-        1..=2 => Style::default().fg(Color::Yellow),
-        _ => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        Some(1..=2) => Style::default().fg(Color::Yellow),
+        Some(_) => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
     }
 }
 
@@ -172,23 +173,43 @@ pub fn render(f: &mut Frame, app: &mut App) {
                 dep.name,
                 dep.latest_version
             );
-            let vuln_count = app.vuln_cache.get(&cache_key).map_or(0, |res| match res {
-                Ok(vulns) => vulns
-                    .iter()
-                    .filter(|v| !app.config.is_vulnerability_ignored(&v.id))
-                    .count(),
-                Err(_) => 0,
+            let vuln_count = app.vuln_cache.get(&cache_key).and_then(|res| match res {
+                Ok(vulns) => {
+                    let count = vulns
+                        .iter()
+                        .filter(|v| !app.config.is_vulnerability_ignored(&v.id))
+                        .count();
+                    if count > 0 || dep.ecosystem.has_osv_coverage() {
+                        Some(count)
+                    } else {
+                        None
+                    }
+                }
+                Err(error) => {
+                    let count = error
+                        .findings
+                        .iter()
+                        .filter(|v| !app.config.is_vulnerability_ignored(&v.id))
+                        .count();
+                    if count > 0 {
+                        Some(count)
+                    } else {
+                        None
+                    }
+                }
             });
-            let vuln_label =
-                if app.batch_scan_pending > 0 && !app.vuln_cache.contains_key(&cache_key) {
-                    "…".to_string()
-                } else if vuln_count > 0 {
-                    vuln_count.to_string()
-                } else if dep.ecosystem.has_osv_coverage() {
-                    "✓".to_string()
-                } else {
-                    "-".to_string()
-                };
+            let vuln_label = if dep.ecosystem.has_osv_coverage()
+                && app.batch_scan_pending > 0
+                && !app.vuln_cache.contains_key(&cache_key)
+            {
+                "…".to_string()
+            } else {
+                match vuln_count {
+                    None => "?".to_string(),
+                    Some(0) => "✓".to_string(),
+                    Some(count) => count.to_string(),
+                }
+            };
 
             Row::new(vec![
                 Cell::from(app.selection_state(index).marker()),
@@ -202,15 +223,19 @@ pub fn render(f: &mut Frame, app: &mut App) {
         })
         .collect();
 
-    let tab_title = tf(
-        "table_title_selected",
-        &[
-            match app.active_tab {
-                Tab::Local => t("table_title_local"),
-                Tab::Global => t("table_title_global"),
-            },
-            &app.selected_count().to_string(),
-        ],
+    let tab_title = format!(
+        "{} {}",
+        t("main_audit_unknown_legend"),
+        tf(
+            "table_title_selected",
+            &[
+                match app.active_tab {
+                    Tab::Local => t("table_title_local"),
+                    Tab::Global => t("table_title_global"),
+                },
+                &app.selected_count().to_string(),
+            ],
+        )
     );
 
     let table = Table::new(
@@ -393,11 +418,28 @@ pub fn render(f: &mut Frame, app: &mut App) {
                     }
                 }
                 Err(err_msg) => {
-                    vuln_section.push_str(&tf("audit_failed", &[err_msg]));
+                    vuln_section.push_str(&tf("audit_failed", &[&err_msg.message]));
+                    for vuln in &err_msg.findings {
+                        if app.config.is_vulnerability_ignored(&vuln.id) {
+                            continue;
+                        }
+                        has_active_vulns = true;
+                        vuln_section.push_str(&tf(
+                            "vuln_item",
+                            &[
+                                &vuln.id,
+                                &vuln.aliases.join(", "),
+                                &vuln.summary,
+                                &vuln.details,
+                            ],
+                        ));
+                    }
                 }
             }
+        } else if has_limited_audit {
+            vuln_section.push_str(t("secure_limited"));
         } else if app.batch_scan_pending > 0 {
-            vuln_section.push_str(" ⏳ Scanning security...");
+            vuln_section.push_str(t("security_scanning"));
         } else {
             vuln_section.push_str(t("select_prompt"));
         }
@@ -453,10 +495,97 @@ pub fn render(f: &mut Frame, app: &mut App) {
     f.render_widget(status_widget, chunks[3]);
 
     let help =
-        Paragraph::new(t("help_tui")).style(Style::default().fg(Color::Black).bg(Color::Cyan));
+        Paragraph::new(t("help_hint")).style(Style::default().fg(Color::Black).bg(Color::Cyan));
     f.render_widget(help, chunks[4]);
 
-    match &app.modal {
+    match &mut app.modal {
+        Modal::ConfirmOffline(dep, error) => {
+            let area = centered_rect(65, 60, size);
+            f.render_widget(Clear, area);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .title(t("modal_offline_title"))
+                .border_style(Style::default().fg(Color::Yellow));
+            let text = tf("modal_offline_msg", &[&dep.name, error]);
+            f.render_widget(
+                Paragraph::new(text).block(block).wrap(Wrap { trim: true }),
+                area,
+            );
+        }
+        Modal::Help { scroll } => {
+            let area = centered_rect(85, 85, size);
+            f.render_widget(Clear, area);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(t("help_title"))
+                .border_style(Style::default().fg(Color::Cyan));
+            let inner = block.inner(area);
+            let paragraph = Paragraph::new(t("help_commands"))
+                .wrap(Wrap { trim: false })
+                .style(Style::default().fg(Color::White));
+            let max_scroll = paragraph
+                .line_count(inner.width.max(1))
+                .saturating_sub(inner.height as usize);
+            *scroll = (*scroll as usize).min(max_scroll).min(u16::MAX as usize) as u16;
+            f.render_widget(block, area);
+            f.render_widget(paragraph.scroll((*scroll, 0)), inner);
+        }
+        Modal::ConfirmReview(dep, report) => {
+            let area = centered_rect(65, 60, size);
+            f.render_widget(Clear, area);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .title(t("modal_review_title"))
+                .border_style(Style::default().fg(Color::Yellow));
+            let reason = crate::review::display_review_reason(&report.reason);
+            let text = tf("modal_review_msg", &[&dep.name, &reason]);
+            f.render_widget(
+                Paragraph::new(text).block(block).wrap(Wrap { trim: true }),
+                area,
+            );
+        }
+        Modal::ConfirmImpact {
+            dep,
+            preview,
+            scroll,
+        } => {
+            let area = centered_rect(85, 85, size);
+            f.render_widget(Clear, area);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(t("impact_title"));
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            let parts = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(1), Constraint::Length(1)])
+                .split(inner);
+            let mut text = tf("impact_warning", &[&dep.name]);
+            if let crate::impact::ImpactPreview::ManagerOutput {
+                text: output,
+                truncated,
+            } = preview
+            {
+                text.push_str(t("impact_manager_output"));
+                if *truncated {
+                    text.push_str(t("impact_truncated"));
+                    text.push_str("\n\n");
+                }
+                text.push_str(output);
+            } else {
+                text.push_str(t("impact_unavailable"));
+            }
+            let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+            let max = paragraph
+                .line_count(parts[0].width.max(1))
+                .saturating_sub(parts[0].height as usize);
+            *scroll = (*scroll as usize).min(max).min(u16::MAX as usize) as u16;
+            f.render_widget(paragraph.scroll((*scroll, 0)), parts[0]);
+            f.render_widget(Paragraph::new(t("impact_footer")), parts[1]);
+        }
         Modal::ConfirmForce(dep, vulns) => {
             let area = centered_rect(65, 60, size);
             f.render_widget(Clear, area);
@@ -561,6 +690,46 @@ pub fn render(f: &mut Frame, app: &mut App) {
                 .wrap(Wrap { trim: true });
 
             f.render_widget(paragraph, area);
+        }
+        Modal::ReviewSettings {
+            provider,
+            model,
+            input,
+        } => {
+            let area = centered_rect(75, 45, size);
+            f.render_widget(Clear, area);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .title(t("review_settings_title"))
+                .border_style(Style::default().fg(Color::Yellow));
+            let current = match input {
+                crate::app::ReviewSettingsInput::Menu => t("review_settings_menu").to_string(),
+                crate::app::ReviewSettingsInput::Model(value) => {
+                    format!("{} {}_", t("review_settings_model_input"), value)
+                }
+                crate::app::ReviewSettingsInput::Key(value) => format!(
+                    "{} {}_",
+                    t("review_settings_key_input"),
+                    crate::secrets::mask_secret(value)
+                ),
+            };
+            let text = format!(
+                "{}: {}\n{}: {}\n\n{}\n\n{}",
+                t("review_settings_provider"),
+                provider.id(),
+                t("review_settings_model"),
+                model,
+                current,
+                t("review_settings_warning")
+            );
+            f.render_widget(
+                Paragraph::new(text)
+                    .block(block)
+                    .style(Style::default().fg(Color::White))
+                    .wrap(Wrap { trim: true }),
+                area,
+            );
         }
         Modal::None => {}
     }
@@ -721,4 +890,382 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn review_settings_masks_key_in_rendered_terminal() {
+        let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+        let mut app = App::new(std::path::PathBuf::from("."), false);
+        app.open_review_settings();
+        app.review_settings_begin_input(true);
+        for character in "synthetic-private-key".chars() {
+            app.review_settings_input_char(Some(character));
+        }
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<String>();
+        assert!(!text.contains("synthetic-private-key"));
+        assert!(text.contains('•'));
+    }
+
+    #[test]
+    fn main_audit_messages_follow_locale() {
+        if let Ok(language) = std::env::var("TUCUPI_MAIN_TEST_LANGUAGE") {
+            let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+            let mut app = App::new(std::path::PathBuf::from("."), false);
+            let dep = crate::models::Dependency {
+                name: "example".into(),
+                current_version: "1".into(),
+                latest_version: "2".into(),
+                ecosystem: Ecosystem::Cargo,
+                is_global: false,
+                origin: None,
+            };
+            app.local_deps.push(dep.clone());
+            app.batch_scan_pending = 1;
+            terminal.draw(|frame| render(frame, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains(if language == "pt" {
+                    "Auditando segurança"
+                } else {
+                    "Scanning security"
+                }),
+                "{text}"
+            );
+            app.local_deps[0].ecosystem = Ecosystem::Mise;
+            terminal.draw(|frame| render(frame, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let rows: Vec<String> = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect()
+                })
+                .collect();
+            let row = rows
+                .iter()
+                .find(|row| row.contains("example") && row.contains("mise"))
+                .unwrap();
+            assert!(row.contains('?'), "{row}");
+            assert!(
+                rows.iter().any(|row| row.contains(if language == "pt" {
+                    "Auditoria indisponível"
+                } else {
+                    "Security audit unavailable"
+                })),
+                "{rows:?}"
+            );
+            app.local_deps[0].ecosystem = Ecosystem::Cargo;
+            app.batch_scan_pending = 0;
+            let key = "Cargo_example_2".to_string();
+            for (result, expected) in [
+                (None, "?"),
+                (Some(Err("offline".into())), "?"),
+                (Some(Ok(Vec::new())), "✓"),
+            ] {
+                app.vuln_cache.remove(&key);
+                if let Some(result) = result {
+                    app.vuln_cache.insert(key.clone(), result);
+                }
+                terminal.draw(|frame| render(frame, &mut app)).unwrap();
+                let buffer = terminal.backend().buffer();
+                let rows: Vec<String> = (0..buffer.area.height)
+                    .map(|y| {
+                        (0..buffer.area.width)
+                            .map(|x| buffer[(x, y)].symbol())
+                            .collect()
+                    })
+                    .collect();
+                let row = rows
+                    .iter()
+                    .find(|row| row.contains("example") && row.contains("Cargo"))
+                    .unwrap();
+                assert!(row.contains(expected), "{row}");
+                assert!(
+                    rows.iter().any(|row| row.contains(if language == "pt" {
+                        "? = auditoria indisponível"
+                    } else {
+                        "? = audit unavailable"
+                    })),
+                    "{rows:?}"
+                );
+            }
+            app.config.security.require_online = Some(false);
+            app.process_security_result(dep.clone(), Err("network error".into()), false);
+            assert!(matches!(app.modal, Modal::ConfirmOffline(_, _)));
+            terminal.draw(|frame| render(frame, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains(if language == "pt" {
+                    "AUDITORIA ONLINE INDISPONÍVEL"
+                } else {
+                    "ONLINE AUDIT UNAVAILABLE"
+                }),
+                "{text}"
+            );
+            assert!(!text.contains("OFFLINE_WARNING"), "{text}");
+            let vulnerability = VulnerabilityInfo {
+                id: "TEST-1".into(),
+                summary: "external explanation".into(),
+                details: String::new(),
+                aliases: Vec::new(),
+                severity: None,
+                score: None,
+                sources: Vec::new(),
+            };
+            app.modal = Modal::None;
+            app.vuln_cache.insert(
+                "Cargo_example_2".into(),
+                Err(crate::security::AuditFailure {
+                    message: "OSV offline".into(),
+                    findings: vec![vulnerability.clone()],
+                    partial: true,
+                }),
+            );
+            terminal.draw(|frame| render(frame, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("TEST-1"), "{text}");
+            assert!(
+                text.contains(if language == "pt" {
+                    "Falha na auditoria"
+                } else {
+                    "Security audit failed"
+                }),
+                "{text}"
+            );
+            app.modal = Modal::Blocked(dep.clone(), vec![vulnerability.clone()]);
+            terminal.draw(|frame| render(frame, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains(if language == "pt" {
+                    "ATUALIZAÇÃO BLOQUEADA"
+                } else {
+                    "UPGRADE BLOCKED"
+                }),
+                "{text}"
+            );
+            if language == "pt" {
+                assert!(!text.to_lowercase().contains("upgrades"), "{text}");
+            }
+            assert!(
+                text.contains(if language == "pt" {
+                    "Resumo original:"
+                } else {
+                    "Original summary:"
+                }),
+                "{text}"
+            );
+            app.modal = Modal::ConfirmForce(dep.clone(), vec![vulnerability]);
+            terminal.draw(|frame| render(frame, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains(if language == "pt" {
+                    "Resumo original:"
+                } else {
+                    "Original summary:"
+                }),
+                "{text}"
+            );
+            app.modal = Modal::ConfirmReview(
+                dep.clone(),
+                crate::review::ReviewReport {
+                    verdict: crate::review::ReviewVerdict::Review,
+                    reason: "deterministic scan only (LLM review disabled)".into(),
+                    view_mode: crate::review::ReviewViewMode::Diff,
+                    residual_line_count: 1,
+                    hits: Vec::new(),
+                    origin: crate::review::ReviewOrigin::Unknown,
+                },
+            );
+            terminal.draw(|frame| render(frame, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains(if language == "pt" {
+                    "verificação determinística"
+                } else {
+                    "Deterministic scan only"
+                }),
+                "{text}"
+            );
+            if let Modal::ConfirmReview(_, report) = &mut app.modal {
+                report.reason = "provider isolation not verified — treat as unreviewed".into();
+            }
+            terminal.draw(|frame| render(frame, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains(if language == "pt" {
+                    "O provedor não foi iniciado"
+                } else {
+                    "The provider was not started"
+                }),
+                "{text}"
+            );
+            assert!(
+                crate::review::display_review_reason("brew info failed for example").contains(
+                    if language == "pt" {
+                        "Não foi possível consultar"
+                    } else {
+                        "Could not query"
+                    }
+                )
+            );
+            assert!(
+                crate::review::display_review_reason("model explanation").contains(
+                    if language == "pt" {
+                        "Detalhe original"
+                    } else {
+                        "Original detail"
+                    }
+                )
+            );
+            assert_eq!(
+                crate::review::ReviewVerdict::Block.display_label(),
+                if language == "pt" {
+                    "bloqueado"
+                } else {
+                    "blocked"
+                }
+            );
+            assert!(
+                crate::i18n::tf("backup_prepare_failed", &["sample"]).contains(
+                    if language == "pt" {
+                        "Falha ao preparar"
+                    } else {
+                        "Failed to prepare"
+                    }
+                )
+            );
+            app.modal = Modal::ConfirmImpact {
+                dep,
+                preview: crate::impact::ImpactPreview::ManagerOutput {
+                    text: "package\n".repeat(3000),
+                    truncated: true,
+                },
+                scroll: 0,
+            };
+            terminal.draw(|frame| render(frame, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains(if language == "pt" {
+                    "prévia foi truncada"
+                } else {
+                    "preview was truncated"
+                }),
+                "{text}"
+            );
+            assert!(
+                text.contains(if language == "pt" {
+                    "Continuar"
+                } else {
+                    "Continue"
+                }),
+                "{text}"
+            );
+            return;
+        }
+        for (language, locale) in [("pt", "pt_BR.UTF-8"), ("en", "en_US.UTF-8")] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "ui::tests::main_audit_messages_follow_locale"])
+                .env("TUCUPI_MAIN_TEST_LANGUAGE", language)
+                .env("LC_ALL", locale)
+                .status()
+                .unwrap();
+            assert!(status.success(), "locale {locale} failed");
+        }
+    }
+
+    #[test]
+    fn help_panel_scrolls_to_last_command_on_small_terminal() {
+        let mut terminal = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut app = App::new(std::path::PathBuf::from("."), false);
+        app.modal = Modal::Help { scroll: u16::MAX };
+        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let text: String = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Esc"), "{text}");
+        assert!(text.contains("mouse"), "{text}");
+    }
 }
