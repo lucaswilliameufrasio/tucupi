@@ -517,6 +517,10 @@ fn recovery_status_fails_closed_when_writer_holds_state_lock() {
         ))
         .stdout(predicate::str::contains("BLOCKED"));
     assert_eq!(std::fs::read(state.join("pending-intent")).unwrap(), intent);
+    // Explicitly unlock the shared open-file description before inspecting it.
+    // A concurrent test may briefly inherit the descriptor during fork/exec.
+    // SAFETY: this is the same live descriptor locked above.
+    assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) }, 0);
     drop(lock);
     let inspection = tucupi::same_user_supervisor::inspect_recovery(&state);
     assert_eq!(
