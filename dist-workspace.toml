@@ -23,4 +23,5 @@ allow-dirty = ["ci"]
 # GitHub's generated ARM macOS runner label is not supported for this repository.
 # Build the Apple Silicon target by cross-compiling on a standard macOS runner.
 [dist.github-custom-runners]
-aarch64-apple-darwin = "macos-14"
+aarch64-apple-darwin.runner = "macos-15-intel"
+aarch64-apple-darwin.host = "x86_64-apple-darwin"
