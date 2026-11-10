@@ -19,3 +19,8 @@ hosting = "github"
 install-updater = false
 # Whether to allow hand-edits to CI files (e.g. pinned SHAs, permission scoping)
 allow-dirty = ["ci"]
+
+# GitHub's generated ARM macOS runner label is not supported for this repository.
+# Build the Apple Silicon target by cross-compiling on a standard macOS runner.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-14"
